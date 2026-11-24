@@ -163,7 +163,9 @@ function OpenLiveJikkyo(pid,jkID,nid,sid)
     if not (refugeID and JKCNSL_REFUGE_URI or chatID and (not JKCNSL_REFUGE_URI or JKCNSL_REFUGE_MIXING)) then
       return 'Unable to determine chat ID.'
     end
-    local postName='jkcnsl_edcb_'..pid
+    -- 実況IDの切り替えなどで前回のjkcnslが終了しきる前に起動すると投稿用パイプ名が衝突して起動に失敗する。
+    -- また前回のjkcnslを閉じる処理が新しいjkcnslに届いてしまうので、投稿用パイプ名は起動ごとに変える
+    local postName=JkcnslPostNamePrefix(pid)..('%010d%03d'):format(os.time(),math.random(0,999))
     local cmd=(WIN32 and QuoteCommandArgForPath(JKCNSL_PATH) or FindToolsCommand(JKCNSL_PATH))..' -i -n '..postName..' -p '..pid
       ..(WIN32 and '' or ' -d '..QuoteCommandArgForPath(JKCNSL_UNIX_BASE_DIR))
       ..(JKCNSL_ANONYMITY and ' --post-as-anon' or '')..' --post-drop-dup --post-interval 2000 --post-maxlen 80'

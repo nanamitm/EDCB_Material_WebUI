@@ -1944,7 +1944,7 @@ const datacastMixin = (Base = class {}) => class extends Base{
     this.#ctrl.abort();
     this.#ctrl=null;
   }
-  #openSubStream(){
+  #openSubStream(reconnectCount=0){
     if(this.#reopen)return;
     if(this.#ctrl){
       this.#ctrl.abort();
@@ -1956,29 +1956,34 @@ const datacastMixin = (Base = class {}) => class extends Base{
       return;
     }
     if(!this.#e.initSrc||!this.#params.has('psidata')&&!this.#params.has('jikkyo'))return;
-    let reconnectCount=0;
     this.#mHeader=null;
-    this.#ctrl=new AbortController();
+    const ctrl=this.#ctrl=new AbortController();
+    // 再接続は5秒後に行い、失敗(データなし)が続く場合は3回で諦める
+    // (以前は再接続のたびに回数がリセットされ、失敗し続けると無限に再接続していた)
+    const reconnect=()=>{
+      this.#ctrl=null;
+      if(++reconnectCount>2)return;
+      this.#reopen=true;
+      setTimeout(()=>{this.#reopen=false;this.#openSubStream(reconnectCount);},5000);
+    };
     fetch(`${this.#e.initSrc}&${this.#params.toString()}&ofssec=${Math.floor(this.fixedCurrentTime||this.#e.currentTime)}`,{
-      signal:this.#ctrl.signal
+      signal:ctrl.signal
     }).then(response=>{
       if(!response.ok)throw new Error(response.status+" "+response.statusText);
       return this.#progressPsiDataChatMixedStream(response.body.getReader());
     }).then(readCount=>{
-      if(this.#ctrl){
+      if(this.#ctrl===ctrl){
         if(this.#params.has('psidata'))this.#dataStream.error("Done: "+readCount+" bytes");
         if(this.#params.has('jikkyo')&&!this.#shiftable)this.#jkStream.error("Done: "+readCount+" bytes");
-        if(++reconnectCount>2)reconnectCount=0;
-        else this.#openSubStream();
-        this.#ctrl=null;
+        // データを受信できていれば回数をリセットして再接続する
+        reconnectCount=0;
+        reconnect();
       }
     }).catch(e=>{
-      if(this.#ctrl){
+      if(this.#ctrl===ctrl){
         if(this.#params.has('psidata'))this.#dataStream.error(""+e);
         if(this.#params.has('jikkyo')&&!this.#shiftable)this.#jkStream.error(""+e);
-        if(++reconnectCount>2)reconnectCount=0;
-        else this.#openSubStream();
-        this.#ctrl=null;
+        reconnect();
       }
     });
   }

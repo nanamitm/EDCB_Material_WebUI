@@ -38,8 +38,11 @@ if pid then
     comm=mail..(refuge and ' refuge' or ' nico')..comm
     code=405
     if JKCNSL_PATH then
-      postName='jkcnsl_edcb_'..pid
-      if WIN32 then
+      -- 投稿用パイプ名はjkcnslの起動ごとに変わるので最も新しいものを探す
+      postName=FindJkcnslPostName(pid)
+      if not postName then
+        fpost=nil
+      elseif WIN32 then
         fpost=edcb.io.open('\\\\.\\pipe\\'..postName,'w')
       else
         for retry=1,9 do

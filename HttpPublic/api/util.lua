@@ -1076,6 +1076,23 @@ function ReadJikkyoChunk(f)
   return head..payload
 end
 
+--jkcnslの投稿用パイプ(ファイル)名の接頭辞
+function JkcnslPostNamePrefix(pid)
+  return 'jkcnsl_edcb_'..pid..'_'
+end
+
+--起動中のjkcnslの投稿用パイプ(ファイル)名のうち最も新しいものを探す
+function FindJkcnslPostName(pid)
+  local prefix=JkcnslPostNamePrefix(pid)
+  local ret=nil
+  for i,v in ipairs(edcb.FindFile(WIN32 and '\\\\.\\pipe\\'..prefix..'*' or PathAppend(JKCNSL_UNIX_BASE_DIR,prefix..'*'),0) or {}) do
+    if v.name:find('^'..prefix:gsub('%p','%%%0')..'%d+$') and (not ret or v.name>ret) then
+      ret=v.name
+    end
+  end
+  return ret
+end
+
 --ビッグエンディアンの値を取得する
 function GetBeNumber(buf,pos,len)
   local n=0
