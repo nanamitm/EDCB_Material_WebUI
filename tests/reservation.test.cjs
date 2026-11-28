@@ -63,7 +63,7 @@ test('tuner selection follows actual IDs while preserving a valid selection', ()
 });
 
 function detailApp() {
-  return Object.assign(methods('    async openProgramDetailById(', '    openAutoaddDetail('), {
+  return Object.assign(methods('    beginDetailRequest()', '    sidePanel:'), methods('    async openProgramDetailById(', '    openAutoaddDetail('), {
     detailRequestId: 0, now: Date.now(), params: {},
     sidePanel: { show() {} }, isPage: () => true,
     getEventID: d => `1-2-3-${d.eid}`,
