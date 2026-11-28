@@ -206,6 +206,7 @@ document.addEventListener('alpine:init', () => {
     now: Date.now(),
     isOnline: false,
     isCellular: false,
+    onairNetwork: null,
     dataSaver: false,
     refreshVersions: {},
     eventSource: null,
@@ -579,17 +580,7 @@ document.addEventListener('alpine:init', () => {
 
       setInterval(() => {
         this.now = Date.now();
-        // 放送中の番組が終了したかチェック
-        let needSync = false;
-        for (const id in this.dashboardData.nowOnAir) {
-          const entry = this.dashboardData.nowOnAir[id];
-          const p = entry.current;
-          if (p && this.now >= p.startTime + p.durationSecond * 1000) {
-            needSync = true;
-            break;
-          }
-        }
-        if (needSync) this.syncNowOnAir();
+        if (this.needsNowOnAirSync()) this.syncNowOnAir();
       }, 1000);
 
       const mqlSmall = window.matchMedia("(max-width: 600px)");
@@ -1930,6 +1921,11 @@ document.addEventListener('alpine:init', () => {
     nowOnAirList(i) {
       return this.getNetworkServices(i).map(s => ({ ...s, ...this.dashboardData.nowOnAir[this.getServiceID(s)] })).filter(e => !e.subCh || e.current && !this.isGroupSub(e.current) && !e.current.isDummy);
     },
+    needsNowOnAirSync() {
+      return Object.values(this.dashboardData.nowOnAir).some(({ current, next }) => current &&
+        (Number.isFinite(current.durationSecond) && this.now >= current.startTime + current.durationSecond * 1000 ||
+          next && this.now >= next.startTime));
+    },
     syncNowOnAir() {
       const now = this.now;
       const res = {};
@@ -1951,21 +1947,27 @@ document.addEventListener('alpine:init', () => {
         let current = null;
         let next = null;
 
-        const currentIndex = events.findIndex(v => v.startTime <= now && v.startTime + v.durationSecond * 1000 > now);
+        const currentIndex = events.findIndex((v, i) => v.startTime <= now &&
+          (Number.isFinite(v.durationSecond) ? v.startTime + v.durationSecond * 1000 > now
+            : !events[i + 1] || events[i + 1].startTime > now));
 
         if (currentIndex !== -1) {
           // 現在放送中の番組が見つかった場合
           current = { ...events[currentIndex], stationName: s.service_name };
-          const nextStart = current.startTime + current.durationSecond * 1000;
           const nextActual = events[currentIndex + 1];
-
-          if (nextActual && nextActual.startTime === nextStart) {
-            // 次の番組が連続している場合
-            next = { ...nextActual, stationName: s.service_name };
+          if (!Number.isFinite(current.durationSecond)) {
+            // 終了未定の番組名を保持し、次番組があれば開始時刻で切り替える
+            next = nextActual ? { ...nextActual, stationName: s.service_name } : null;
           } else {
-            // 次の番組との間に隙間がある、または次の番組がない
-            const duration = nextActual ? (nextActual.startTime - nextStart) / 1000 : 3600;
-            next = createDummy(s, nextStart, duration);
+            const nextStart = current.startTime + current.durationSecond * 1000;
+            if (nextActual && nextActual.startTime === nextStart) {
+              // 次の番組が連続している場合
+              next = { ...nextActual, stationName: s.service_name };
+            } else {
+              // 次の番組との間に隙間がある、または次の番組がない
+              const duration = nextActual ? (nextActual.startTime - nextStart) / 1000 : 3600;
+              next = createDummy(s, nextStart, duration);
+            }
           }
         } else {
           // 現在放送中の番組がない場合（隙間期間）
@@ -2003,6 +2005,10 @@ document.addEventListener('alpine:init', () => {
     // displayableNetworks から「すべて」を除外したリスト（局選択メニュー等で使用）
     get selectableNetworks() {
       return this.displayableNetworks.filter(n => n.index > 0);
+    },
+    ensureOnAirNetwork() {
+      const networks = this.selectableNetworks;
+      if (!networks.some(n => n.index === this.onairNetwork)) this.onairNetwork = networks[0]?.index ?? null;
     },
     // 検索UI用でCSを細分化
     get searchNetworks() {
@@ -2129,7 +2135,7 @@ document.addEventListener('alpine:init', () => {
       active: null,
       onPointerEnter(event) {
         if (this.set.hover && !event.isGap) {
-          this.active = event.eid;
+          this.active = this.getEventID(event);
         }
       },
       onPointerLeave() {
@@ -2143,8 +2149,8 @@ document.addEventListener('alpine:init', () => {
         if (this.hasMoved) return;
         clearTimeout(this.clickTimeout);
         this.clickTimeout = setTimeout(() => {
-          // Gap（番組の隙間）であるか、既にアクティブなら解除、そうでなければeidをセット
-          this.active = event.isGap || this.active === event.eid ? null : event.eid;
+          // サービスが異なる同一EIDの番組を区別する
+          this.active = event.isGap || this.active === this.getEventID(event) ? null : this.getEventID(event);
         }, 200);
       },
       // ダブルクリックハンドラ
@@ -2168,7 +2174,7 @@ document.addEventListener('alpine:init', () => {
           'partially': event.reserve?.overlapMode === 1,
           'shortage': event.reserve?.overlapMode === 2,
           'view': event.reserve?.recSetting.recMode === 5,
-          'large-elevate': !event.isGap && this.active === event.eid,
+          'large-elevate': !event.isGap && this.active === this.getEventID(event),
           [genreClass]: true
         };
       },
@@ -2216,6 +2222,8 @@ document.addEventListener('alpine:init', () => {
       const timeChanged = epg.lastLoadedStart !== gridStart;
       const networkChanged = epg.lastLoadedNetwork !== epg.activeNetwork;
       const subChChanged = epg.lastLoadedSubCh !== this.sets.subCh;
+      const sourceChanged = epg.lastLoadedSource !== dataMap || epg.lastLoadedServiceData !== this.lastUpdated.service ||
+        epg.lastLoadedOneseg !== this.sets.oneseg;
 
       // 中断と新規 ID 発行
       const currentLoadId = ++epg.loadId;
@@ -2225,20 +2233,26 @@ document.addEventListener('alpine:init', () => {
       epg.lastLoadedData = this.lastUpdated.epg;
       epg.lastLoadedReserve = this.lastUpdated.reserve;
       epg.lastLoadedKey = slotKey;
+      epg.lastLoadedSource = dataMap;
+      epg.lastLoadedServiceData = this.lastUpdated.service;
+      epg.lastLoadedOneseg = this.sets.oneseg;
 
       // 1. サービスリストの準備
-      if (networkChanged || subChChanged || epg.servicesToDisplay.length === 0) {
-        epg.servicesToDisplay = this.serviceList
+      if (networkChanged || subChChanged || timeChanged || sourceChanged || epg.servicesToDisplay.length === 0) {
+        epg.servicesToDisplay = Array.from(this.allData.service.values())
+          .filter(s => this.sets.oneseg || !s.partialReceptionFlag)
           .filter(s => this.isActiveNetwork(0) || this.isActiveNetwork(this.getNetworkIndex(s.onid, s.partialReceptionFlag)))
           .filter(s => !s.subCh)
+          .filter(s => dataMap.has(this.getServiceID(s)) || (s.subSids || []).some(sid => dataMap.has(this.getServiceID({ ...s, sid }))))
           .map(s => ({ ...s, displayEvents: [] }));
-      } else if (timeChanged || isUnchanged) {
-        // 時間が変わったか、ページ入り直しの場合は一旦クリアしてパラパラさせる
+      } else if (isUnchanged) {
+        // ページ入り直しの場合は一旦クリアしてパラパラさせる
         epg.servicesToDisplay.forEach(s => s.displayEvents = []);
       }
 
       // 代入後にプロキシ化された参照を取得する（比較用）
       const currentServices = epg.servicesToDisplay;
+      if (currentServices.length === 0) return;
 
       if (timeChanged || networkChanged || isUnchanged) this.$main.scrollTo(0, 0);
 
@@ -2256,8 +2270,8 @@ document.addEventListener('alpine:init', () => {
           // 全サービス（メイン + サブ）を取得
           const allSvs = [s, ...(s.subSids || [])
             .map(sid => this.allData.service.get(this.getDataKey({ ...s, sid }, 'service')))
-            .filter(s => this.allData.epg.has(this.getServiceID(s)))
             .filter(Boolean)
+            .filter(s => dataMap.has(this.getServiceID(s)))
           ];
 
           const total = allSvs.length;
