@@ -1,8 +1,10 @@
-const CACHE_NAME = 'e3-pwa-cache-v16';
+const CACHE_NAME = 'e3-pwa-cache-v17';
 const ASSETS = [
   './',
   './index.html',
   './js/app.js',
+  './js/ts-loader.js',
+  './js/hls.worker.js',
   './css/style.css',
   './css/ts-loader.css',
   './css/beer.min.css',
@@ -29,13 +31,13 @@ const ASSETS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS).catch((err) => {
-        console.warn('Pre-caching failed, but service worker will still install:', err);
-      });
-    })
+    caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS))
+      .then(() => self.skipWaiting())
+      .catch(async err => {
+        await caches.delete(CACHE_NAME);
+        throw err;
+      })
   );
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -48,9 +50,31 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim())
   );
-  self.clients.claim();
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const id = event.notification.data?.eventId;
+  if (typeof id !== 'string' || !/^\d+-\d+-\d+-\d+$/.test(id)) return;
+  const target = new URL(self.registration.scope);
+  target.searchParams.set('id', id);
+  target.hash = '#epg';
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const existing = windows.find(client => client.url.startsWith(self.registration.scope));
+    if (existing?.navigate) {
+      // 管理下にないウィンドウではnavigateが失敗するため、新しいウィンドウで開く
+      try {
+        const navigated = await existing.navigate(target.href);
+        if (navigated) { await navigated.focus(); return; }
+      } catch (e) {
+        console.warn('Notification navigation failed:', e);
+      }
+    }
+    await self.clients.openWindow(target.href);
+  })());
 });
 
 self.addEventListener('fetch', (event) => {

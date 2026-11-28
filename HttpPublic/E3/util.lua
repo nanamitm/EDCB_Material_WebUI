@@ -1,4 +1,4 @@
-app='261128j'
+app='261128k'
 tsloader='261128a'
 beer='5.0.3'
 mdc='1.1.4'
@@ -22,12 +22,12 @@ dofile(mg.document_root:gsub('['..DIR_SEPS..']*$',DIR_SEP)..'api'..DIR_SEP..'uti
 function GetAppConfig()
   local ctok={}
   for i,v in ipairs({'common','settings','setreserve','setautoadd','setmanuadd','setrecinfo','searchevent','view','xcode','comment'}) do
-    table.insert(ctok, string.format('%s: \'%s\'',v,CsrfToken(v)))
+    ctok[v]=CsrfToken(v)
   end
 
   local searchPresetList={}
   for i,v in ipairs(Split(edcb.GetPrivateProfile('search','list','',INI),',')) do
-    table.insert(searchPresetList, string.format('\'%s\'',v))
+    table.insert(searchPresetList,v)
   end
 
   local minTime, maxTime = nil, nil
@@ -44,7 +44,7 @@ function GetAppConfig()
     end
   end
 
-  local useSsePort=tonumber(edcb.GetPrivateProfile('E3','useSsePort',false,INI))~=0 and 'true' or 'false'
+  local useSsePort=tonumber(edcb.GetPrivateProfile('E3','useSsePort',false,INI))~=0
   local rsdef=((edcb.GetReserveData(0x7FFFFFFF) or {}).recSetting or {})
 
   local function EdcbFindFilePlain(path)
@@ -62,31 +62,34 @@ function GetAppConfig()
   local xcode={}
   for i, v in ipairs(XCODE_OPTIONS) do
     if v.tslive or not ALLOW_HLS or not ALWAYS_USE_HLS or v.outputHls then
-      local s=v.tslive and string.format(',tslive:true,autoCinema:%s,deinterlace:\'%s\'%s', v.autoCinema and 'true' or 'false', v.deinterlace, v.maxRateForDoubling and ',maxRateForDoubling:'..v.maxRateForDoubling or '') or ''
-      table.insert(xcode, string.format('{id:%d,name:\'%s\'%s}', i, v.name, s))
+      local item={id=i,name=v.name}
+      if v.tslive then
+        item.tslive=true
+        item.autoCinema=not not v.autoCinema
+        item.deinterlace=v.deinterlace
+        item.maxRateForDoubling=v.maxRateForDoubling
+      end
+      table.insert(xcode,item)
     end
   end
   local zip = NVRAM_ZIP:match('^'..('[0-9]'):rep(7)..'$') or ''
   local prefecture=math.floor(math.max(NVRAM_REGION<=50 and NVRAM_REGION or 0,0))
 
-  return '{root: \''..PathToRoot()
-    ..'\', useSsePort: '..useSsePort
-    ..', ctok: {'..table.concat(ctok,', ')..'}'
-    ..', searchPresetList: ['..table.concat(searchPresetList,', ')..']'
-    ..', epgTimeRange: { min: '..(minTime or 0)..', max: '..(maxTime or 0)..' },'
-    ..' rsdef: {'
-    ..' serviceMode: '..(rsdef.serviceMode or 0)
-    ..', startMargin: '..(rsdef.startMargin or 0)
-    ..', endMargin: '..(rsdef.endMargin or 0)
-    ..' },'
-    ..' hasNosuspend: '..(hasNosuspend and 'true' or 'false')..','
-    ..' nosuspendActive: '..(nosuspendActive and 'true' or 'false')..','
-    ..' enableSuspend: '..(INDEX_ENABLE_SUSPEND and 'true' or 'false')..','
-    ..' suspendMode: \''..(INDEX_SUSPEND_USE_HIBERNATE and 'hibernate' or 'suspend')..'\','
-    ..' xcode: ['..table.concat(xcode,', ')..'],'
-    ..' nvram: { zip: \''..zip.. '\', prefecture: '..prefecture.. '},'
-    ..' jk: { heightPercent: '..JK_COMMENT_HEIGHT_PERCENT..', duration: '..JK_COMMENT_DURATION..'}'
-    ..'}'
+  return ConvertJson({
+    root=PathToRoot(),useSsePort=useSsePort,ctok=ctok,searchPresetList=searchPresetList,
+    epgTimeRange={min=minTime or 0,max=maxTime or 0},
+    rsdef={serviceMode=rsdef.serviceMode or 0,startMargin=rsdef.startMargin or 0,endMargin=rsdef.endMargin or 0},
+    hasNosuspend=not not hasNosuspend,nosuspendActive=nosuspendActive,
+    enableSuspend=not not INDEX_ENABLE_SUSPEND,suspendMode=INDEX_SUSPEND_USE_HIBERNATE and 'hibernate' or 'suspend',
+    xcode=xcode,nvram={zip=zip,prefecture=prefecture},
+    jk={heightPercent=JK_COMMENT_HEIGHT_PERCENT,duration=JK_COMMENT_DURATION}
+  })
+end
+
+-- JSONの引用符などをx-data属性の境界として解釈させない
+function GetAppConfigAttribute()
+  local escapes={['&']='&amp;',['<']='&lt;',['>']='&gt;',['"']='&quot;',["'"]='&#39;'}
+  return GetAppConfig():gsub([=[[&<>"']]=],escapes)
 end
 
 -- ナビゲーション項目の定義
