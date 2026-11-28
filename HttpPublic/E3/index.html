@@ -3530,13 +3530,13 @@ ct:Append([=[
                         <nav class="wrap no-row-gap" :class="isServiceModeDef(r) && 'disabled'">
                           <div class="m l max"></div>
                           <label class="checkbox">
-                            <input type="checkbox" :disabled="isServiceModeDef(r)"
+                            <input type="checkbox" name="serviceMode_1" :disabled="isServiceModeDef(r)"
                                   :checked="isServiceModeBitSet(16, r)"
                                   @change="toggleServiceModeBit(16, $el.checked, r)">
                             <span>字幕を含める</span>
                           </label>
                           <label class="checkbox">
-                            <input type="checkbox" :disabled="isServiceModeDef(r)"
+                            <input type="checkbox" name="serviceMode_2" :disabled="isServiceModeDef(r)"
                                   :checked="isServiceModeBitSet(32, r)"
                                   @change="toggleServiceModeBit(32, $el.checked, r)">
                             <span>データカルーセルを含める</span>
@@ -4797,13 +4797,19 @@ ct:Append([=[
                   <i>arrow_drop_down</i>
                 </div>
 
-                <fieldset class="s12 no-margin" x-data="{ date: new Date(d.startTime ?? Math.floor(now / 60000) * 60000) }" x-init="$watch('d.startTime', v => date = new Date(v ?? Math.floor(now / 60000) * 60000))">
+                <fieldset class="s12 no-margin" x-data="{ date: new Date(d.startTime ?? Math.floor(now / 60000) * 60000), startDay: '' }" x-init="startDay = date.toLocaleDateString('sv'); $watch('d.startTime', v => { date = new Date(v ?? Math.floor(now / 60000) * 60000); startDay = date.toLocaleDateString('sv') })">
                   <legend>日時</legend>
                   <nav class="wrap">
                     <div class="field label prefix border small round">
                       <i>today</i>
-                      <input type="date" name="startdate" :value="date.toLocaleDateString('sv')">
+                      <input type="date" name="startdate" :value="date.toLocaleDateString('sv')"
+                             @change="if ($el.value && startDay && $refs.enddate.value) $refs.enddate.value = new Date(Date.parse($refs.enddate.value) + Date.parse($el.value) - Date.parse(startDay)).toISOString().slice(0, 10); if ($el.value) startDay = $el.value">
                       <label>開始日</label>
+                    </div>
+                    <div class="field label prefix border small round">
+                      <i>event</i>
+                      <input type="date" name="enddate" x-ref="enddate" :value="new Date(date.getTime() + (d.durationSecond ?? 30*60)*1000).toLocaleDateString('sv')">
+                      <label>終了日</label>
                     </div>
                     <nav class="no-space">
                       <div class="field label prefix border small left-round">
@@ -5001,13 +5007,13 @@ ct:Append([=[
                   <nav class="wrap no-row-gap">
                     <div class="m l max"></div>
                     <label class="checkbox">
-                      <input type="checkbox" :disabled="isServiceModeDef()"
+                      <input type="checkbox" name="serviceMode_1" :disabled="isServiceModeDef()"
                               :checked="isServiceModeBitSet(16)"
                               @change="toggleServiceModeBit(16, $el.checked)">
                       <span>字幕を含める</span>
                     </label>
                     <label class="checkbox">
-                      <input type="checkbox" :disabled="isServiceModeDef()"
+                      <input type="checkbox" name="serviceMode_2" :disabled="isServiceModeDef()"
                               :checked="isServiceModeBitSet(32)"
                               @change="toggleServiceModeBit(32, $el.checked)">
                       <span>データカルーセルを含める</span>
