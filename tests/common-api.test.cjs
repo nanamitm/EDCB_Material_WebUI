@@ -36,6 +36,13 @@ test('the EPG description uses the same escaped formatter', () => {
   assert.ok(html.includes('x-html="convert.text(d.shortInfo?.text_char)"'));
 });
 
+test('program auto-reservation titles are escaped before HTML insertion', () => {
+  const html = fs.readFileSync(path.join(root, 'HttpPublic/E3/index.html'), 'utf8');
+  assert.ok(!/x-html="[^"\n]*\btitle"/.test(html.replace(/convert\.title\([^)"]*\)/g, '')));
+  const { title } = methods('      title(a) {', '      sanitizeTitle(a) {');
+  assert.equal(title('<img src=x onerror=alert(1)>[字]'), '&lt;img src=x onerror=alert(1)&gt;<span class="mark">字</span>');
+});
+
 function client(fetch) {
   return Object.assign(methods('    async fetchWithToken(', '    // クエリパラメータを解析'), {
     ctok: { setautoadd: 'old', searchevent: 'old' },
