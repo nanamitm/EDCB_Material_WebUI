@@ -91,12 +91,7 @@ function SaveBasic()
 end
 
 function SaveRecFolder()
-  local itemList=EdcbRecFolderPathList()
-  if #itemList==1 and IsEqualPath(itemList[1],EdcbSettingPath()) then
-    --既定値なので記録しない
-    return
-  end
-  itemList={}
+  local itemList={}
   for i=0,10000 do
     local v=mg.get_var(post, 'recFolder', i)
     if not v then break end
@@ -106,6 +101,10 @@ function SaveRecFolder()
         itemList[#itemList+1]=v
       end
     end
+  end
+  if #itemList==1 and IsEqualPath(itemList[1],EdcbSettingPath()) then
+    --送信された一覧が既定値なら、保存済みの独自設定も解除する
+    itemList={}
   end
   for i,v in ipairs(itemList) do
     edcb.WritePrivateProfile('SET','RecFolderPath'..(i-1),v,commonIni)
@@ -279,19 +278,29 @@ function GetEpgTime()
   return ret
 end
 
-function SaveEpgTime()
+--EPG取得時刻を検証して一覧を返す。不正な値があればmessageを設定してnilを返す
+function ParseEpgTime()
   local itemList={}
   local item=mg.get_var(post,'epgTime') or ''
   for v in item:gmatch('[^,]+') do
-    local weekMin,flags,enabled=v:match('^([0-9]+)-([0-9]+)-([01])$')
-    if weekMin and flags and enabled then
+    local weekMin,flags,enabled=v:match('^([0-9]+)-(%-?[0-9]+)-([01])$')
+    if weekMin and tonumber(weekMin)<=11519 and tonumber(flags)>=-1 and tonumber(flags)<=15 then
       itemList[#itemList+1] = {
         weekMin=tonumber(weekMin) or 0,
         flags=tonumber(flags) or 0,
         enabled=tonumber(enabled)==1
       }
+    else
+      message='EPG取得時刻が不正です'
+      return nil
     end
   end
+  return itemList
+end
+
+function SaveEpgTime(itemList)
+  itemList=itemList or ParseEpgTime()
+  if not itemList then return false end
   for i,v in ipairs(itemList) do
     edcb.WritePrivateProfile('EPG_CAP',i-1,
       ('%02d:%02d'):format(math.floor(v.weekMin/60)%24,v.weekMin%60)
@@ -621,7 +630,9 @@ function SavePreset()
         --デフォルトは削除できない
         if presetID~=0 then
           presetID=nil
-          table.remove(itemList,i)
+          for i,v in ipairs(itemList) do
+            if v==found then table.remove(itemList,i); break end
+          end
         end
       elseif mg.get_var(post,'addchg') then
         if mg.get_var(post,'add') then
@@ -925,13 +936,41 @@ function GetAppNetwork(tcp)
   return ret
 end
 
-function SaveAppNetwork(tcp)
+function ParseAppNetwork(tcp)
+  local function validIPv4(ip)
+    local a,b,c,d=ip:match('^(%d+)%.(%d+)%.(%d+)%.(%d+)$')
+    return a and tonumber(a)<=255 and tonumber(b)<=255 and tonumber(c)<=255 and tonumber(d)<=255
+  end
+  local function validAddress(ip)
+    if not ip:find(':',1,true) then return validIPv4(ip) end
+    local address=ip
+    if address:find('%%') then
+      address=address:match('^([^%%]+)%%[%w_.%-]+$')
+      if not address then return false end
+    end
+    address=address:gsub('%d+%.%d+%.%d+%.%d+$',function(v) return validIPv4(v) and '0:0' or 'invalid' end)
+    if address:find('[^%x:]') or address:find(':::',1,true) then return false end
+    local compressed=address:find('::',1,true)
+    if compressed and address:find('::',compressed+2,true) then return false end
+    if address:sub(1,1)==':' and address:sub(1,2)~='::' or address:sub(-1)==':' and address:sub(-2)~='::' then return false end
+    local count=0
+    for part in address:gmatch('[^:]+') do
+      if #part>4 then return false end
+      count=count+1
+    end
+    return compressed and count<8 or not compressed and count==8
+  end
   local itemList={}
   local item=mg.get_var(post,tcp and 'tcp' or 'udp') or ''
+  if item:find('^,') or item:find(',$') or item:find(',,',1,true) then
+    message=(tcp and 'TCP' or 'UDP')..'の送信先が不正です'
+    return nil
+  end
   for v in item:gmatch('[^,]+') do
-    local ip,port,broadcast=v:match('([^:]+):(%d+):(%d+)')
-    --IPアドレスっぽくないものを弾く
-    if ip and port and ip:find('^[0-9A-Za-z%%.:]+$') and ip:find('[^%%.:]') and ip:find('[.:]') then
+    --末尾のポートとフラグを分離し、IPv6内部のコロンを保持する
+    local ip,port,broadcast=v:match('^(.*):(%d+):([01])$')
+    if ip then ip=ip:match('^%[(.*)%]$') or ip end
+    if ip and validAddress(ip) and tonumber(port)<=65535 then
       port=tonumber(port)
       if ip=='0.0.0.1' then
         --SrvPipeのPortは常に0
@@ -940,7 +979,7 @@ function SaveAppNetwork(tcp)
         --PipeのPortは基本的に0
         port=0
       end
-      broadcast=not tcp and broadcast==1
+      broadcast=not tcp and broadcast=='1'
       for i,v in ipairs(itemList) do
         if v.ip==ip and v.port%65536==port%65536 and v.broadcast==broadcast then
           --既にある
@@ -952,17 +991,26 @@ function SaveAppNetwork(tcp)
         itemList[#itemList+1] = {
           ip=ip,
           port=tonumber(port) or 0,
-          broadcast=broadcast==1
+          broadcast=broadcast
         }
       end
+    else
+      message=(tcp and 'TCP' or 'UDP')..'の送信先が不正です'
+      return nil
     end
   end
+  return itemList
+end
+
+function SaveAppNetwork(tcp,itemList)
+  itemList=itemList or ParseAppNetwork(tcp)
+  if not itemList then return false end
   for i,v in ipairs(itemList) do
-    local ipA,ipB,ipC,ipD=v.ip:match('^([0-2]?[0-9]?[0-9])%.([0-2]?[0-9]?[0-9])%.([0-2]?[0-9]?[0-9])%.([0-2]?[0-9]?[0-9])$')
+    local ipA,ipB,ipC,ipD=v.ip:match('^(%d+)%.(%d+)%.(%d+)%.(%d+)$')
     if ipA then
       --IPv4。非負の整数に変換
       ip=(tonumber(ipA) or 0)*256*256*256+(tonumber(ipB) or 0)*256*256+(tonumber(ipC) or 0)*256+(tonumber(ipD) or 0)
-      ip=math.floor(ip<0x100000000 and (ip>=0x80000000 and ip-0x100000000 or ip>0 and ip) or 0)
+      ip=ip>=0x80000000 and ip-0x100000000 or ip
     else
       ip='['..v.ip..']'
     end
@@ -1003,7 +1051,7 @@ end
 
 function GetNvram()
   return {
-    zip=tonumber(edcb.GetPrivateProfile('NVRAM','ZIP','',INI)),
+    zip=edcb.GetPrivateProfile('NVRAM','ZIP','',INI),
     region=tonumber(edcb.GetPrivateProfile('NVRAM','REGION',0,INI)),
   }
 end
@@ -1107,7 +1155,7 @@ function SaveWebUI()
   edcb.WritePrivateProfile('JK','JKCNSL_PATH',mg.get_var(post,'jkcnslPath') or '',INI)
 
   if not WIN32 then
-    edcb.WritePrivateProfile('JK','JKCNSL_UNIX_BASE_DIR',mg.get_var(post,'jkcnslUnixBaseDir') or '',INI)
+    edcb.WritePrivateProfile('JK','UNIX_BASE_DIR',mg.get_var(post,'jkcnslUnixBaseDir') or '',INI)
     edcb.WritePrivateProfile('JK','JKTASK_BASE_DIR',mg.get_var(post,'jktaskBaseDir') or '',INI)
   end
 
@@ -1125,7 +1173,9 @@ if post then
   if not ALLOW_SETTING then
     message='設定変更は許可されていません'
   else
-    if GetVarInt(post,'srv')==1 then
+    -- 同じ要求の他の項目を書き込む前に検証し、不正なら何も書き込まない
+    local epgTimes=GetVarInt(post,'srv')==1 and GetVarInt(post,'saveEpg')==1 and ParseEpgTime() or nil
+    if GetVarInt(post,'srv')==1 and not message then
       network=nil
       if GetVarInt(post,'saveBasic')==1 then
         SaveBasic()
@@ -1133,9 +1183,9 @@ if post then
         SaveBon()
       end
       if GetVarInt(post,'saveEpg')==1 then
+        SaveEpgTime(epgTimes)
         SaveEpg()
         SaveEpgService()
-        SaveEpgTime()
       end
       if GetVarInt(post,'saveRec')==1 then
         SaveRec()
@@ -1150,16 +1200,19 @@ if post then
         network=SaveOther()
         SaveViewBon()
       end
-      edcb.ReloadSetting(network)
+      if not message then edcb.ReloadSetting(network) end
     end
 
     if GetVarInt(post,'webUI')==1 then SaveWebUI() end
     if GetVarInt(post,'presetID') then SavePreset() end
     if GetVarInt(post,'savePlugin')==1 then SavePlugin() end
     if GetVarInt(post,'saveApp')==1 then
-      SaveApp()
-      SaveAppNetwork(false)
-      SaveAppNetwork(true)
+      local udp,tcp=ParseAppNetwork(false),ParseAppNetwork(true)
+      if udp and tcp then
+        SaveApp()
+        SaveAppNetwork(false,udp)
+        SaveAppNetwork(true,tcp)
+      end
     end
   end
 end

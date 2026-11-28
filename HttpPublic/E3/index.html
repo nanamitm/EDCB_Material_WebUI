@@ -3393,7 +3393,7 @@ ct:Append([=[
               <div class="page" :class="isPresetTab(0)" x-init="loadPreset(0)" x-ref="recPreset">
                 <nav>
                   <div class="field suffix border max">
-                    <select @change="loadPreset($el.value)">
+                    <select x-model.number="presetID" @change="loadPreset($el.value)">
                       <template x-for="v in Array.from(allData.recpreset.values())">
                         <option :value="v.id" x-text="v.name"></option>
                       </template>
