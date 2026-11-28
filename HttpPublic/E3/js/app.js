@@ -269,6 +269,8 @@ document.addEventListener('alpine:init', () => {
 
     sets: {
       sidebar: false,
+      // 保存済み設定の復元は既定値にある項目だけを対象にするため、画面で変更できる項目はすべてここに定義する
+      RecinfoDel: false,
       dataSaver: true,
       oneseg: false,
       networkMask: 1,

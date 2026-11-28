@@ -1,4 +1,4 @@
-const CACHE_NAME = 'e3-pwa-cache-v16';
+const CACHE_NAME = 'e3-pwa-cache-v17';
 const ASSETS = [
   './',
   './index.html',
@@ -65,8 +65,13 @@ self.addEventListener('notificationclick', event => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const existing = windows.find(client => client.url.startsWith(self.registration.scope));
     if (existing?.navigate) {
-      const navigated = await existing.navigate(target.href);
-      if (navigated) { await navigated.focus(); return; }
+      // 管理下にないウィンドウではnavigateが失敗するため、新しいウィンドウで開く
+      try {
+        const navigated = await existing.navigate(target.href);
+        if (navigated) { await navigated.focus(); return; }
+      } catch (e) {
+        console.warn('Notification navigation failed:', e);
+      }
     }
     await self.clients.openWindow(target.href);
   })());

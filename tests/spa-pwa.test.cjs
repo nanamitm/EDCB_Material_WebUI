@@ -93,6 +93,17 @@ test('valid preferences merge known fields and invalid values or prototype keys 
   assert.equal(a.sets.mode, 'auto'); assert.equal(a.sets.theme, '#6750A4'); assert.equal(a.sets.view.library, 'grid'); assert.equal(a.sets.dataSaver, false);
   assert.equal({}.polluted, undefined);
 });
+test('every setting bound in the UI has a default so that it is restored', () => {
+  const html = fs.readFileSync(path.join(root, 'HttpPublic/E3/index.html'), 'utf8');
+  const start = source.indexOf('\n    sets: {'), end = source.indexOf('\n    },\n', start);
+  assert.ok(start >= 0 && end > start);
+  const defaults = source.slice(start, end);
+  const keys = new Set([...html.matchAll(/x-model(?:\.\w+)*="sets\.(\w+)/g)].map(m => m[1]));
+  assert.ok(keys.has('RecinfoDel'));
+  for (const key of keys) assert.match(defaults, new RegExp(`\\n\\s+${key}:`), `sets.${key} has no default`);
+  const a = preferences('{"RecinfoDel":true}'); a.sets.RecinfoDel = false;
+  a.loadPreferences(); assert.equal(a.sets.RecinfoDel, true);
+});
 
 function sw(fail = false) {
   const handlers = {}, scope = 'https://example.test/E3/', stores = new Map([['e3-pwa-cache-v15', new Map([['old-shell', 'working']])]]);
@@ -135,6 +146,11 @@ test('notification clicks reuse a scoped window or open the program route', asyn
   assert.equal(new URL(navigated).searchParams.get('id'), '1-2-3-4'); assert.equal(new URL(navigated).hash, '#epg'); assert.equal(focused, true);
   s.state.windows = []; await lifecycle(e => s.handlers.notificationclick({ ...event(), waitUntil: e.waitUntil }));
   assert.equal(s.state.opened.length, 1);
+  // 管理下にないウィンドウではnavigateが例外になるため、新しいウィンドウで開く
+  s.state.windows = [{ url: s.scope, navigate: async () => { throw new TypeError('not controlled'); } }];
+  s.context.console = { warn() {} };
+  await lifecycle(e => s.handlers.notificationclick({ ...event(), waitUntil: e.waitUntil }));
+  assert.equal(s.state.opened.length, 2);
   let waited = false; s.handlers.notificationclick({ notification: { data: { eventId: 'https://evil.test' }, close() {} }, waitUntil() { waited = true; } });
   assert.equal(waited, false);
 });
