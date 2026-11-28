@@ -117,3 +117,23 @@ test('program reservation forms submit an end date as well as an end time', () =
   const end = new Date(start.getTime() + 25 * 3600000);
   assert.equal(end.getTime() - start.getTime(), 90000000);
 });
+
+test('changing the program start date moves the end date by the same number of days', () => {
+  const tag = [...html.matchAll(/<input\b[^>]*name="startdate"[^>]*>/g)].map(m => m[0])[0];
+  assert.ok(tag, 'missing startdate input');
+  const expr = tag.match(/@change="([^"]*)"/)?.[1];
+  assert.ok(expr, 'startdate must update the end date on change');
+  assert.ok(/<input\b[^>]*name="enddate"[^>]*x-ref="enddate"/.test(html));
+  const run = (start, end, next) => {
+    const scope = { startDay: start, $el: { value: next }, $refs: { enddate: { value: end } } };
+    Function('scope', `with (scope) { ${expr} }`)(scope);
+    return [scope.$refs.enddate.value, scope.startDay];
+  };
+  // 日またぎの予約は翌日終了のまま全体が移動する
+  assert.deepEqual(run('2026-11-28', '2026-11-29', '2026-11-30'), ['2026-12-01', '2026-11-30']);
+  // 同日の予約・月末や年末をまたぐ移動
+  assert.deepEqual(run('2026-11-28', '2026-11-28', '2026-12-31'), ['2026-12-31', '2026-12-31']);
+  assert.deepEqual(run('2026-12-31', '2027-01-01', '2026-12-30'), ['2026-12-31', '2026-12-30']);
+  // 開始日を消した場合は終了日を変更しない
+  assert.deepEqual(run('2026-11-28', '2026-11-29', ''), ['2026-11-29', '2026-11-28']);
+});
