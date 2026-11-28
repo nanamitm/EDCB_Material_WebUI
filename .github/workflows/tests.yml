@@ -1,0 +1,47 @@
+name: tests
+
+on:
+  push:
+    branches: [E3]
+  pull_request:
+    branches: [E3]
+
+permissions:
+  contents: read
+
+jobs:
+  javascript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: |
+          node --check HttpPublic/E3/js/app.js
+          node --check HttpPublic/E3/js/ts-loader.js
+          node --check HttpPublic/E3/sw.js
+      - name: Run Node tests
+        run: node --test tests/*.test.cjs
+
+  lua:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua 5.2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.2
+      - name: Run Lua tests
+        run: |
+          failed=0
+          for f in tests/*.lua; do
+            echo "::group::$f"
+            if ! lua5.2 "$f"; then
+              echo "::error file=$f::$f failed"
+              failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $failed
