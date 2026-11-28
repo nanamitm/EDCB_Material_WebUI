@@ -900,6 +900,8 @@ class TsThumb{
 
 const datacastMixin = (Base = class {}) => class extends Base{
   #e;
+  #mediaVersion = 0;
+  #dataVersion = 0;
   #params;
   #fast;
   #elems = {
@@ -1035,6 +1037,8 @@ const datacastMixin = (Base = class {}) => class extends Base{
     });
   }
   #clear(){
+    this.#mediaVersion++;
+    this.#dataVersion++;
     if (!this.#noDanmaku){
       this.#danmaku.clear();
       this.#jklog.disable();
@@ -1067,6 +1071,7 @@ const datacastMixin = (Base = class {}) => class extends Base{
     else this.#psc.enable();
   }
   #disableDatacast(){
+    this.#dataVersion++;
     if (!this.#noWebBml){
       if (this.#datacastState==this.#STATE.STREAM) this.#dataStream.disable();
       else this.#psc.disable();
@@ -1290,7 +1295,7 @@ const datacastMixin = (Base = class {}) => class extends Base{
     }
   }
 
-  #progressPsiDataChatMixedStream(reader){
+  #progressPsiDataChatMixedStream(reader, current){
     return new Promise((resolve,reject)=>{
       let readCount=0;
       let response="";
@@ -1299,7 +1304,9 @@ const datacastMixin = (Base = class {}) => class extends Base{
       let psiData=new Uint8Array(0);
       const decoder=new TextDecoder();
       const readNext=()=>{
+        if (!current()) { resolve(readCount); return; }
         reader.read().then(r=>{
+          if (!current()) { resolve(readCount); return; }
           if(r.done){
             if(readCount)resolve(readCount);
             else reject("Error: Empty stream");
@@ -1323,8 +1330,8 @@ const datacastMixin = (Base = class {}) => class extends Base{
                   }
                   if(this.#mHeader[2]){
                     const tm=this.#mHeader[2]-Math.floor(this.fixedCurrentTime||this.#e.currentTime);
-                    if(this.#elems.inputTM)this.#elems.inputTM.value==new Date(1000*tm+32400000).toISOString().substring(0,16);
-                    if(this.#elems.inputTMSec)this.#elems.inputTMSec.options[tm%60].selected=true;
+                    if(this.#elems.inputTM)this.#elems.inputTM.value=new Date(1000*tm+32400000).toISOString().substring(0,16);
+                    if(this.#elems.inputTMSec)this.#elems.inputTMSec.options[(tm%60+60)%60].selected=true;
                   }
                 }
                 this.#jkStream.stream(s);
@@ -1734,13 +1741,14 @@ const datacastMixin = (Base = class {}) => class extends Base{
     this.#elems.container.style.setProperty("--dplayer-danmaku-item-opacity", `${v}`);
   }
   #setJK(id, tm){
-    if (this.#jklog.ctrl&&this.#logText==null) return;
     if (id) this.#params.set('jkID', id);
-    if (tm) this.#params.set('jkTM', tm);
+    if (tm != null) {
+      if (tm) this.#params.set('jkTM', tm);
+      else this.#params.delete('jkTM');
+    }
     if (this.#e.initSrc&&!this.#shiftable) this.#openSubStream();
     else{
-      this.#logText=null;
-      this.#jklog.ctrl=null;
+      this.#jklog.disable();
       this.#jklog.enable();
     }
   }
@@ -1825,23 +1833,28 @@ const datacastMixin = (Base = class {}) => class extends Base{
     },
     enable: async () => {
       if(!this.#e.getAttribute("src")||this.#e.getAttribute("src").startsWith("blob")&&!this.#e.initSrc)return;
+      const version=this.#mediaVersion, dataVersion=this.#dataVersion;
       if(this.#loaded&&this.#loaded!=this.#e.getAttribute("src"))await this.#initWebBml();
+      if (version!==this.#mediaVersion || dataVersion!==this.#dataVersion) return;
       this.#datacastState=this.#STATE.LOG;
       this.#psc.startRead();
       bmlBrowserSetInvisible(false);
       if(this.#psc.ctrl)return;
-      this.#psc.ctrl=new AbortController();
+      const ctrl=this.#psc.ctrl=new AbortController();
+      const current=()=>this.#psc.ctrl===ctrl && version===this.#mediaVersion && !ctrl.signal.aborted;
       fetch(this.#e.getAttribute("src").replace(/\.[0-9A-Za-z]+$/,"")+".psc",{
-        signal:this.#psc.ctrl.signal
+        signal:ctrl.signal
       }).then(response=>{
+        if (!current()) return;
         if(!response.ok)throw new Error(response.status+" "+response.statusText);
         return response.arrayBuffer();
       }).then(arrayBuffer=>{
+        if (!current()) return;
         this.#psiData=arrayBuffer;
       }).catch(e=>{
-        if(this.#elems.indicator)this.#elems.indicator.innerText=""+e;
+        if(current() && this.#elems.indicator)this.#elems.indicator.innerText=""+e;
       }).finally(() => {
-        this.#psc.ctrl=null;
+        if (current()) this.#psc.ctrl=null;
       });
     },
   }
@@ -1850,8 +1863,17 @@ const datacastMixin = (Base = class {}) => class extends Base{
   #mHeader;
   #stats;
   #shiftable;
+  #jklogQuery(){
+    const query=new URLSearchParams(this.#fname());
+    query.set('jkID',this.#params.get('jkID')||0);
+    query.set('jkTM',this.#params.get('jkTM')||0);
+    const duration=Math.floor(this.#e.duration);
+    if (Number.isFinite(duration) && duration>=1 && duration<=86400) query.set('fsec',duration);
+    return query;
+  }
   #jklog = {
     offsetSec: 0,
+    needsMetadata: () => !this.#e.initSrc && (this.#e.readyState===0 || !(Number.isFinite(this.#e.duration) && this.#e.duration>=1)),
     startRead: () => {
       clearTimeout(this.#jklog.readTimer);
       const startSec=(this.fixedCurrentTime||this.#e.currentTime)+this.#jklog.offsetSec;
@@ -1876,6 +1898,14 @@ const datacastMixin = (Base = class {}) => class extends Base{
       this.#jklog.readTimer=setTimeout(()=>read(),200);
     },
     disable: () => {
+      this.#jklog.pendingDownload=false;
+      if (this.#jklog.waitForMetadata) {
+        this.#e.removeEventListener('loadedmetadata',this.#jklog.waitForMetadata);
+        this.#jklog.waitForMetadata=null;
+      }
+      this.#jklog.downloadCtrl?.abort();
+      this.#jklog.downloadCtrl=null;
+      this.#jklog.restoreButton();
       clearTimeout(this.#jklog.readTimer);
       this.#jklog.readTimer=0;
       if(this.#jklog.ctrl){
@@ -1893,16 +1923,33 @@ const datacastMixin = (Base = class {}) => class extends Base{
     enable: () => {
       if(!this.#e.getAttribute("src")||this.#e.getAttribute("src").startsWith("blob")&&!this.#e.initSrc)return;
       this.#jikkyoState=this.#STATE.LOG;
+      if (this.#jklog.needsMetadata()) {
+        if (!this.#jklog.waitForMetadata) {
+          this.#jklog.waitForMetadata=()=>{
+            this.#jklog.waitForMetadata=null;
+            const download=this.#jklog.pendingDownload;
+            this.#jklog.pendingDownload=false;
+            this.#jklog.enable();
+            if (download) this.#jklog.kakolog();
+          };
+          this.#e.addEventListener('loadedmetadata',this.#jklog.waitForMetadata,{once:true});
+        }
+        return;
+      }
       this.#chatsScroller();
       this.#jklog.startRead();
       if(this.#jklog.ctrl)return;
-      this.#jklog.ctrl=new AbortController();
-      fetch(`${this.#api.jklog}?${this.#fname()}&jkID=${this.#params.get('jkID')||0}&jkTM=${this.#params.get('jkTM')||0}`,{
-        signal:this.#jklog.ctrl.signal
+      const ctrl=this.#jklog.ctrl=new AbortController();
+      const version=this.#mediaVersion;
+      const current=()=>this.#jklog.ctrl===ctrl && version===this.#mediaVersion && !ctrl.signal.aborted;
+      fetch(`${this.#api.jklog}?${this.#jklogQuery()}`,{
+        signal:ctrl.signal
       }).then(response=>{
+        if (!current()) return;
         if(!response.ok)throw new Error(response.status+" "+response.statusText);
         return response.text();
       }).then(text=>{
+        if (!current()) return;
         this.#logText=text;
         const m=this.#logText.match(/^<!-- J=([0-9]+);T=([0-9]+)/);
         if(m){
@@ -1924,27 +1971,49 @@ const datacastMixin = (Base = class {}) => class extends Base{
           this.#elems.comm.insertBefore(this.#stats.canvas,this.#elems.comm.firstChild);
         }
       }).catch(e=>{
-        this.#jkStream.error(""+e);
+        if (current()) this.#jkStream.error(""+e);
       }).finally(() => {
-        this.#jklog.ctrl=null;
+        if (current()) this.#jklog.ctrl=null;
       });
+    },
+    restoreButton: () => {
+      if (this.#jklog.buttonText!=null) {
+        this.#elems.kakolog.innerText=this.#jklog.buttonText;
+        this.#elems.kakolog.disabled=false;
+        this.#jklog.buttonText=null;
+      }
     },
     kakolog: () => {
       if(!this.#e.getAttribute("src")&&!this.#e.initSrc)return;
-      const btnText=this.#elems.kakolog.innerText;
+      if (this.#jklog.needsMetadata()) {
+        this.#jklog.pendingDownload=true;
+        this.#jklog.enable();
+        return;
+      }
+      if (this.#jklog.downloadCtrl) return;
+      const ctrl=this.#jklog.downloadCtrl=new AbortController();
+      const version=this.#mediaVersion;
+      const current=()=>this.#jklog.downloadCtrl===ctrl && version===this.#mediaVersion && !ctrl.signal.aborted;
+      this.#jklog.buttonText=this.#elems.kakolog.innerText;
       this.#elems.kakolog.innerText="取得中...";
       this.#elems.kakolog.disabled=true;
-      fetch(`${this.#api.jklog}?${this.#fname()}&jkID=${this.#params.get('jkID')||0}&jkTM=${this.#params.get('jkTM')||0}&kakolog=1`).then(response=>{
+      fetch(`${this.#api.jklog}?${this.#jklogQuery()}&kakolog=1`,{signal:ctrl.signal}).then(response=>{
+        if (!current()) return;
         if(!response.ok)throw new Error(response.status+" "+response.statusText);
         return response.text();
       }).then(text=>{
-        this.#logText=text;
+        if (!current()) return;
+        this.#jklog.ctrl?.abort();
+        this.#jklog.ctrl=null;
+        this.#logText=null;
         this.#jklog.enable();
       }).catch(e=>{
-        this.#jkStream.error(""+e);
+        if (current()) this.#jkStream.error(""+e);
       }).finally(()=>{
-        this.#elems.kakolog.innerText=btnText;
-        this.#elems.kakolog.disabled=false;
+        if (current()) {
+          this.#jklog.downloadCtrl=null;
+          this.#jklog.restoreButton();
+        }
       });
     }
   }
@@ -1980,47 +2049,43 @@ const datacastMixin = (Base = class {}) => class extends Base{
 
   #reopen;
   #ctrl;
+  #reconnectCount = 0;
   #closeSubStream(){
-    if (!this.#ctrl) return;
-    this.#ctrl.abort();
+    clearTimeout(this.#reopen);
+    this.#reopen = null;
+    this.#ctrl?.abort();
     this.#ctrl=null;
   }
-  #openSubStream(){
-    if(this.#reopen)return;
-    if(this.#ctrl){
-      this.#ctrl.abort();
-      this.#ctrl=null;
-      if(this.#params.has('psidata')||this.#params.has('jikkyo')){
-        this.#reopen=true;
-        setTimeout(()=>{this.#reopen=false;this.#openSubStream();},5000);
-      }
-      return;
-    }
+  #openSubStream(retry = false){
+    this.#closeSubStream();
+    if (!retry) this.#reconnectCount = 0;
     if(!this.#e.initSrc||!this.#params.has('psidata')&&!this.#params.has('jikkyo'))return;
-    let reconnectCount=0;
     this.#mHeader=null;
-    this.#ctrl=new AbortController();
+    const ctrl=this.#ctrl=new AbortController();
+    const current=()=>this.#ctrl===ctrl && !ctrl.signal.aborted;
+    const finish=text=>{
+      if (!current()) return;
+      if(this.#params.has('psidata'))this.#dataStream.error(text);
+      if(this.#params.has('jikkyo')&&!this.#shiftable)this.#jkStream.error(text);
+      this.#ctrl=null;
+      if (++this.#reconnectCount<=2) {
+        const version=this.#mediaVersion;
+        this.#reopen=setTimeout(()=>{
+          this.#reopen=null;
+          if (version===this.#mediaVersion) this.#openSubStream(true);
+        },5000);
+      }
+    };
     fetch(`${this.#e.initSrc}&${this.#params.toString()}&ofssec=${Math.floor(this.fixedCurrentTime||this.#e.currentTime)}`,{
-      signal:this.#ctrl.signal
+      signal:ctrl.signal
     }).then(response=>{
+      if (!current()) return;
       if(!response.ok)throw new Error(response.status+" "+response.statusText);
-      return this.#progressPsiDataChatMixedStream(response.body.getReader());
+      return this.#progressPsiDataChatMixedStream(response.body.getReader(),current);
     }).then(readCount=>{
-      if(this.#ctrl){
-        if(this.#params.has('psidata'))this.#dataStream.error("Done: "+readCount+" bytes");
-        if(this.#params.has('jikkyo')&&!this.#shiftable)this.#jkStream.error("Done: "+readCount+" bytes");
-        if(++reconnectCount>2)reconnectCount=0;
-        else this.#openSubStream();
-        this.#ctrl=null;
-      }
+      finish("Done: "+readCount+" bytes");
     }).catch(e=>{
-      if(this.#ctrl){
-        if(this.#params.has('psidata'))this.#dataStream.error(""+e);
-        if(this.#params.has('jikkyo')&&!this.#shiftable)this.#jkStream.error(""+e);
-        if(++reconnectCount>2)reconnectCount=0;
-        else this.#openSubStream();
-        this.#ctrl=null;
-      }
+      finish(""+e);
     });
   }
 
@@ -2043,7 +2108,9 @@ const datacastMixin = (Base = class {}) => class extends Base{
       this.#openSubStream();
     },
     enable: async open => {
+      const version=this.#mediaVersion, dataVersion=this.#dataVersion;
       if(this.#loaded&&this.#loaded!=this.#e.initSrc.href)await this.#initWebBml();
+      if (version!==this.#mediaVersion || dataVersion!==this.#dataVersion) return;
       this.#datacastState=this.#STATE.STREAM;
       this.#params.set('psidata', 1);
       bmlBrowserSetInvisible(false);
@@ -2094,6 +2161,12 @@ TvtPlayのチャプターによるループやスキップ機能
 */
 class chapterTvt{
   #vid;
+  #nextButton = document.getElementById('nextChap');
+  #prevButton = document.getElementById('prevChap');
+  #onNext = () => this.#navigate();
+  #onPrev = () => this.#navigate(false);
+  #onTimeupdate;
+  #destroyed = false;
   #disabled = false;
   #repeat = true;
   #skip = true;
@@ -2105,9 +2178,9 @@ class chapterTvt{
 
   constructor(video){
     this.#vid = video;
-    document.getElementById('nextChap').addEventListener('click', () => this.#navigate());
-    document.getElementById('prevChap').addEventListener('click', () => this.#navigate(false));
-    video.addEventListener('timeupdate', () => {
+    this.#nextButton.addEventListener('click', this.#onNext);
+    this.#prevButton.addEventListener('click', this.#onPrev);
+    this.#onTimeupdate = () => {
       if (this.#disabled || !this.#chapters) return;
 
       const currentTime = this.#currentTime;
@@ -2140,16 +2213,27 @@ class chapterTvt{
           break;
         }
       }
-    });
+    };
+    video.addEventListener('timeupdate', this.#onTimeupdate);
   }
 
   get reset(){return this.#reset}
+  get destroy(){return this.#destroy}
   get setChapters(){return this.#parse}
   get navigate(){return this.#navigate}
   set setSeek(fn){this.#setSeek(fn)}
 
+  #destroy(){
+    if (this.#destroyed) return;
+    this.#destroyed = true;
+    this.#reset();
+    this.#nextButton.removeEventListener('click', this.#onNext);
+    this.#prevButton.removeEventListener('click', this.#onPrev);
+    this.#vid.removeEventListener('timeupdate', this.#onTimeupdate);
+  }
   #reset(){
     this.#lastTime = 0;
+    this.#hasSeeked = null;
     this.#chapters = null;
     this.#intervals = [];
     while (this.#container.firstChild) this.#container.removeChild(this.#container.firstChild);

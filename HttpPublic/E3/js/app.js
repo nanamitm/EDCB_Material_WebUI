@@ -3620,6 +3620,7 @@ document.addEventListener('alpine:init', () => {
             newMeta.track.mode = 'hidden';
           }
           vid.createCap(); // aribb24のイベントリスナーを再登録
+          if (vid.cap) this.set.cap ? vid.cap.show() : vid.cap.hide();
           vid.loadSubData();
         } else {
           if (this.canPlay){
@@ -3650,6 +3651,7 @@ document.addEventListener('alpine:init', () => {
       },
       destroy() {
         this.reset();
+        if (this.chap) Alpine.raw(this.chap).destroy();
         Alpine.raw(this.vid).destroy();
         this.vid = null;
         this.chap = null;
@@ -3945,6 +3947,8 @@ document.addEventListener('alpine:init', () => {
 
       // 初期化 (例: ビデオ要素へのイベントリスナーのアタッチ)
       videoInit() {
+        if (this.chap) Alpine.raw(this.chap).destroy();
+        this.chap = null;
         if (this.vid) Alpine.raw(this.vid).destroy();
         if (!this.$refs.video) {
           setTimeout(() => this.videoInit(), 100);
@@ -4023,6 +4027,7 @@ document.addEventListener('alpine:init', () => {
           setTimeout(() => this.chapterInit(), 100);
           return;
         }
+        if (this.chap) Alpine.raw(this.chap).destroy();
         const chap = new chapterTvt(this.$refs.video);
         this.chap = chap;
         chap.setSeek = val => this.seek(val);

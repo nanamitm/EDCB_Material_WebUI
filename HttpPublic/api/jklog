@@ -263,12 +263,14 @@ if code==200 then
     xml=JKIMLOG_PATH:gsub('[^\\/]*$','')..'jk'..jkID..'.xml'
     for i,v in ipairs(totList) do
       if v.tot<v.totEnd then
-        edcb.os.execute('curl "https://jikkyo.tsukumijima.net/api/kakolog/jk'..jkID..'?starttime='..(v.tot+jkTM)..'^&endtime='..(v.totEnd+jkTM)..'^&format=xml" -o "'..xml..'"')
-        cmd=(WIN32 and QuoteCommandArgForPath(JKIMLOG_PATH) or FindToolsCommand(JKIMLOG_PATH))..' "'..xml..'"'
-        edcb.os.execute(WIN32 and '"'..cmd..'"' or cmd)
+        local uri='https://jikkyo.tsukumijima.net/api/kakolog/jk'..jkID..'?starttime='..(v.tot+jkTM)..'&endtime='..(v.totEnd+jkTM)..'&format=xml'
+        cmd=FindToolsCommand('curl')..' --fail --silent --show-error '..QuoteCommandArgForPath(uri)..' -o '..QuoteCommandArgForPath(xml)
+        if not edcb.os.execute(WIN32 and '"'..cmd..'"' or cmd) then code=502; break end
+        cmd=(WIN32 and QuoteCommandArgForPath(JKIMLOG_PATH) or FindToolsCommand(JKIMLOG_PATH))..' '..QuoteCommandArgForPath(xml)
+        if not edcb.os.execute(WIN32 and '"'..cmd..'"' or cmd) then code=500; break end
       end
     end
-    ct:Append('done')
+    if code==200 then ct:Append('done') end
   else
     currSec=1
     for i,v in ipairs(totList) do
@@ -299,8 +301,12 @@ if code==200 then
       end
     end
   end
-  ct:Finish()
-  mg.write(ct:Pop(Response(200,mg.get_mime_type('a.txt'),'utf-8',ct.len,ct.gzip)..'\r\n'))
+  if code==200 then
+    ct:Finish()
+    mg.write(ct:Pop(Response(200,mg.get_mime_type('a.txt'),'utf-8',ct.len,ct.gzip)..'\r\n'))
+  else
+    mg.write(Response(code,nil,nil,0)..'\r\n')
+  end
 else
   mg.write(Response(code,nil,nil,0)..'\r\n')
 end

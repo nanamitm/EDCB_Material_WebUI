@@ -142,7 +142,7 @@ function player() {
     config: { xcode: [] }, Alpine: { raw: x => x }, window: { location: {} }, history: {},
     document: { createElement: () => ({ canPlayType: () => '' }) } });
   p.vid = { reset() {}, destroy() {}, loadSource: src => s.loads.push(src) };
-  p.video = { setAttribute() {} }; p.chap = { reset() {}, setChapters: () => [[], []] };
+  p.video = { setAttribute() {} }; p.chap = { reset() {}, destroy() {}, setChapters: () => [[], []] };
   p.set = { nwtv: 0 };
   p.app = { ROOT: '', page: '#watch', params: {}, ctok: { xcode: 'xcode', view: 'view' }, $refs: {},
     isPage(page) { return this.page === page; }, fetch: s.context.fetch, updateParams() {} };
