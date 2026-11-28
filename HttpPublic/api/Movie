@@ -35,7 +35,8 @@ else
     if k:lower()=='if-range' then ifRange=v end
   end
   -- 検証可能なETag等を提供していないのでIf-Range付きは全体を返す
-  if ifRange or mg.request_info.request_method~='GET' then range=nil end
+  -- offset指定時は途中から切り出した内容を返すため、ファイル先頭基準のRangeとは組み合わせない
+  if ifRange or offset~=0 or mg.request_info.request_method~='GET' then range=nil end
   local code,first,last=200,offset,fsize-1
   if range then
     local a,b=range:match('^%s*[Bb][Yy][Tt][Ee][Ss]%s*=%s*(%d*)%-(%d*)%s*$')
@@ -52,7 +53,7 @@ else
     if code~=416 then code=206 end
   end
   local length=code==416 and 0 or math.max(0,last-first+1)
-  local headers='Accept-Ranges: bytes\r\n'
+  local headers='Accept-Ranges: '..(offset==0 and 'bytes' or 'none')..'\r\n'
     ..(code==206 and 'Content-Range: bytes '..first..'-'..last..'/'..fsize..'\r\n' or
        code==416 and 'Content-Range: bytes */'..fsize..'\r\n' or '')
     ..(mg.request_info.request_method=='HEAD' and 'Content-Length: '..length..'\r\n' or '')

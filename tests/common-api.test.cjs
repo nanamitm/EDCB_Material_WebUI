@@ -41,6 +41,7 @@ test('program auto-reservation titles are escaped before HTML insertion', () => 
   assert.ok(!/x-html="[^"\n]*\btitle"/.test(html.replace(/convert\.title\([^)"]*\)/g, '')));
   const { title } = methods('      title(a) {', '      sanitizeTitle(a) {');
   assert.equal(title('<img src=x onerror=alert(1)>[字]'), '&lt;img src=x onerror=alert(1)&gt;<span class="mark">字</span>');
+  assert.equal(title('A&B "x" \'y\' &amp;'), 'A&amp;B &quot;x&quot; &#39;y&#39; &amp;amp;');
 });
 
 function client(fetch) {

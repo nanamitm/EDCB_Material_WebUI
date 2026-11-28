@@ -18,7 +18,6 @@ function ChangeRecFilePath(ri,destination)
   -- Windowsのos.renameは移動先があれば失敗する。POSIXのos.renameは上書きするため、移動の直前にも存在を確認する
   -- （確認から移動までの間に作られたファイルは防げないが、従来と同等以上の安全性を保つ）
   local function renameNoReplace(from,to)
-    if edcb.RenameFileNoReplace then return edcb.RenameFileNoReplace(from,to) end
     if not WIN32 and EdcbFindFilePlain(to) then return false end
     return edcb.os.rename(from,to)
   end

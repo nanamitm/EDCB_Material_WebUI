@@ -247,6 +247,17 @@ test('failed SSE reads are retried independently while other topics synchronize'
   assert.equal(calls.get('epg'), 1);
 });
 
+test('simultaneous reservation and EPG updates apply reservations first and redraw once', async () => {
+  const { app, calls, send } = sseSetup(); const order = [];
+  app.page = '#epg';
+  app.refreshData = async topic => { order.push(topic); calls.set(topic, (calls.get(topic) || 0) + 1); };
+  app.refreshEpg = async () => { order.push('epg'); app.loadEpg(); };
+  await send({ reserve: 1, epg: 1 });
+  assert.equal(app.renders, 1);
+  assert.ok(order.indexOf('#reserve') < order.indexOf('epg'));
+  await send({ reserve: 2 });
+  assert.equal(app.renders, 2);
+});
 test('notifications received during a sync are queued rather than discarded', async () => {
   const { app, send, runTimer } = sseSetup(); const pending = deferred(); let calls = 0;
   app.refreshData = async () => { if (++calls === 1) await pending.promise; };

@@ -63,6 +63,15 @@ test('leaving the search page cancels pending result and panel updates', async (
   assert.equal(a.allData.search.has('old'), true);
 });
 
+test('search errors returned by the server show the reason', async () => {
+  const a = app(); const messages = []; a.snackbar.error = text => messages.push(text);
+  a.fetch = async () => response({ err: '検索プリセットが存在しません' });
+  await a.searchPreset(9);
+  assert.equal(messages.length, 1); assert.match(messages[0], /検索プリセットが存在しません/);
+  a.fetch = async () => { throw new TypeError('network'); };
+  await a.searchPreset(9);
+  assert.equal(messages[1], '検索に失敗しました');
+});
 test('a failed preset preserves prior conditions and results', async () => {
   const a = app(); a.fetch = async () => response({ err: 'preset missing' });
   await a.searchPreset(1);

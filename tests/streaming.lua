@@ -61,6 +61,12 @@ local e=serve({},'GET',nil,{cancel=true});assert(e.reads==1 and e.closed==1)
 local e=serve({},'GET',nil,{missing=true});assert(e.code==404)
 local e=serve({},'GET',nil,{seekFail=true});assert(e.code==404 and e.closed==1)
 local e=serve({},'GET',nil,{query={offset='100'}});assert(e.length==0 and e.body=='')
+-- offset指定時は切り出した内容を返すため、ブラウザのRange要求を適用しない
+local e,contents=serve({Range='bytes=0-'},'GET',nil,{query={offset='50'}})
+assert(e.code==200 and not e.writes[1]:find('Content-Range',1,true) and e.writes[1]:find('Accept-Ranges: none',1,true))
+assert(#e.body==e.length and e.length<#contents and e.body==contents:sub(#contents-e.length+1))
+local e=serve({Range='bytes=0-'})
+assert(e.code==206 and e.writes[1]:find('Accept-Ranges: bytes',1,true))
 print('PASS: Movie full/HEAD/bounded/open/suffix ranges, clamping, 416, If-Range, cancellation and file failures')
 
 local function startup(stale,hasPipe)
