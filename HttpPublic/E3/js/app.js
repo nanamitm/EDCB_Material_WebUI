@@ -1247,6 +1247,7 @@ document.addEventListener('alpine:init', () => {
     },
     // ページ切り替え時に呼ばれる
     async loadAll() {
+      this.library?.cancelLoad();
       if (this.searchLoading) {
         this.searchLoading = false;
         this.loading = false;
@@ -4061,10 +4062,22 @@ document.addEventListener('alpine:init', () => {
     library: {
       data: { dir: [], file: [], path: [], loading: true },
       lastParams: { home: 1 },
+      requestId: 0,
+      loading: false,
+      cancelLoad() {
+        this.requestId++;
+        if (this.loading) {
+          this.loading = false;
+          this.app.loading = false;
+        }
+      },
       async load() {
+        this.cancelLoad();
+        const requestId = this.requestId;
+        const current = () => requestId === this.requestId && this.app.isPage('#library');
         this.app.rollThumbLeave();
 
-        const p = this.app.params;
+        const p = { ...this.app.params };
 
         // パラメータが完全に空（サイドバー等からの遷移）なら、
         // 記憶している直前の状態（初期値はhome:1）へリダイレクトして復元
@@ -4078,32 +4091,38 @@ document.addEventListener('alpine:init', () => {
           return;
         }
 
-        this.app.loading = true;
+        this.loading = this.app.loading = true;
         try {
-          const p = new URLSearchParams();
-          p.set('json', '1');
-          if (this.app.params.i) p.set('i', this.app.params.i);
-          if (this.app.params.d) p.set('d', this.app.params.d);
-          if (this.app.params.p) {
-            this.app.params.p.split(',').filter(v => v).forEach(v => p.append('p', v));
+          const query = new URLSearchParams();
+          query.set('json', '1');
+          if (p.i) query.set('i', p.i);
+          if (p.d) query.set('d', p.d);
+          if (p.p) {
+            p.p.split(',').filter(v => v).forEach(v => query.append('p', v));
           }
 
-          const res = await this.app.fetch(`${this.app.ROOT}api/Library?${p.toString()}`);
-          this.data = await res.json();
+          const res = await this.app.fetch(`${this.app.ROOT}api/Library?${query.toString()}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          if (!current()) return;
+          this.data = data;
           this.data.path = this.data.path || [];
           this.data.p_raw = p.p;
+          this.data.file = this.data.file || [];
+          this.data.dir = this.data.dir || [];
           this.data.file.forEach(v => {
             if (v.mtime) v.mtime = new Date(v.mtime).getTime();
           });
           this.sort();
           // 取得成功したら現在の状態を記憶（homeがあれば優先、なければi,d,p）
-          if (!this.data.err) this.lastParams = this.app.params.home ? { home: 1 } : { i: this.app.params.i, d: this.app.params.d, p: this.app.params.p };
+          if (!this.data.err) this.lastParams = p.home ? { home: 1 } : { i: p.i, d: p.d, p: p.p };
           if (this.data.err) this.app.snackbar.error(this.data.err);
         } catch (e) {
+          if (!current()) return;
           console.error(e);
           this.data = { dir: [], file: [], path: [], err: '取得できませんでした' };
         } finally {
-          this.app.loading = false;
+          if (current()) this.loading = this.app.loading = false;
         }
       },
       isOrder(order) {

@@ -9,11 +9,13 @@ node --test tests/autoadd.test.cjs
 node --test tests/recinfo.test.cjs
 node --test tests/epg-onair.test.cjs
 node --test tests/search.test.cjs
+node --test tests/library.test.cjs
 lua tests/common-api.lua
 lua tests/reservation.lua
 lua tests/autoadd.lua
 lua tests/recinfo.lua
 lua tests/search.lua
+lua tests/library.lua
 ```
 
 JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
@@ -30,3 +32,6 @@ JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
 放送時間未定と次番組への切り替え、ネットワーク選択を検証します。
 検索では、通常・プリセットの応答競合、画面遷移、条件と結果の一括反映、過去番組の識別、
 予約の結合、日数の境界とプリセット条件取得APIの互換性を検証します。
+ビデオライブラリでは、一覧取得の応答競合・画面遷移・再生パラメータ、親階層の消失、
+TSパスの引用、チャプターのサイズ上限・読み込み失敗、自動サムネイル保存先の作成を検証します。
+外部コマンドとファイル操作はモック化し、実行しません。
