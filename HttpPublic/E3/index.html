@@ -1535,7 +1535,7 @@ ct:Append([=[
                     <div class="max">
                       <div class="title middle-align bold large-text">
                         <img class="logo space" :src="getLogoPath(d)">
-                        <span x-html="d.title"></span>
+                        <span x-html="convert.title(d.title)"></span>
                       </div>
                       <div class="row wrap tiny-space no-row-space no-margin secondary-text no-line">
                         <span class="middle-align"><i class="primary-text tiny">date_range</i><span x-text="dayText.filter((e, i) => (d.dayOfWeekFlag & 2 ** i))"></span></span>
@@ -1567,7 +1567,7 @@ ct:Append([=[
                 <tbody>
                   <template x-for="d in displayList" :key="d.dataID">
                     <tr class="ripple" @click="openAutoaddDetail(d)">
-                      <td><span x-html="d.title"></span></td>
+                      <td><span x-html="convert.title(d.title)"></span></td>
                       <td><span x-text="dayText.filter((e, i) => (d.dayOfWeekFlag & 2 ** i))"></span></td>
                       <td><span x-html="getDateHtml(d, true)"></span></td>
                       <td><span x-text="d.stationName"></span></td>
