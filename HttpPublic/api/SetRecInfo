@@ -15,9 +15,13 @@ function ChangeRecFilePath(ri,destination)
   if dst and not IsEqualPath(source,destination) then return {err='移動先にファイルが存在します'} end
   if source==destination then return {success='録画ファイルパスに変更はありません'} end
 
-  -- POSIXのos.renameは移動先を上書きするため、安全なAPIがない場合は移動しない
-  local renameNoReplace=edcb.RenameFileNoReplace or (WIN32 and edcb.os.rename)
-  if not renameNoReplace then return {err='安全なファイル移動にはRenameFileNoReplace対応のEDCBが必要です'} end
+  -- Windowsのos.renameは移動先があれば失敗する。POSIXのos.renameは上書きするため、移動の直前にも存在を確認する
+  -- （確認から移動までの間に作られたファイルは防げないが、従来と同等以上の安全性を保つ）
+  local function renameNoReplace(from,to)
+    if edcb.RenameFileNoReplace then return edcb.RenameFileNoReplace(from,to) end
+    if not WIN32 and EdcbFindFilePlain(to) then return false end
+    return edcb.os.rename(from,to)
+  end
   local moves={{from=source,to=destination}}
   local function AddSidecars(from,to)
     for _,ext in ipairs({'.program.txt','.err'}) do
