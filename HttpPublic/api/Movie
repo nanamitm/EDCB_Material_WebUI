@@ -11,43 +11,58 @@ if fpath then
   fname='xcode'..(fpath:match('%.[0-9A-Za-z]+$') or '')
   f=edcb.io.open(fpath, 'rb')
   if f then
-    offset=tonumber(mg.get_var(query,'offset')) or 0
+    fsize=f:seek('end')
+    offset=GetVarInt(query,'offset',0,100) or 0
     if offset~=0 then
       fsec,fsize=GetDurationSec(f)
       if offset~=100 and SeekSec(f,fsec*offset/100,fsec,fsize) then
         offset=f:seek('cur',0) or 0
       else
-        offset=math.floor(fsize*offset/100/188)*188
+        offset=offset==100 and fsize or math.floor(fsize*offset/100/188)*188
       end
     end
-    f:seek('set', offset)
+    offset=math.min(offset,fsize or 0)
+    if not fsize or not f:seek('set',offset) then f:close(); f=nil end
   end
 end
 
 if not f then
   mg.write(Response(404,'text/html','utf-8')..'\r\n')
 else
-  mg.write(Response(200,mg.get_mime_type(fname))..'Content-Disposition: filename='..fname..'\r\n\r\n')
-  if mg.request_info.request_method~='HEAD' then
-    retry=0
-    while true do
-      buf=f:read(48128)
-      if buf and #buf ~= 0 then
-        retry=0
-        if not mg.write(buf) then
-          -- キャンセルされた
-          mg.cry('canceled')
-          break
-        end
-      else
-        -- 終端に達した。4秒間この状態が続けば対象ファイルへの追記が終息したとみなす
-        retry=retry+1
-        if retry > 20 then
-          mg.cry('end')
-          break
-        end
-        edcb.Sleep(200)
-      end
+  local range,ifRange
+  for k,v in pairs(mg.request_info.http_headers or {}) do
+    if k:lower()=='range' then range=v end
+    if k:lower()=='if-range' then ifRange=v end
+  end
+  -- 検証可能なETag等を提供していないのでIf-Range付きは全体を返す
+  if ifRange or mg.request_info.request_method~='GET' then range=nil end
+  local code,first,last=200,offset,fsize-1
+  if range then
+    local a,b=range:match('^%s*[Bb][Yy][Tt][Ee][Ss]%s*=%s*(%d*)%-(%d*)%s*$')
+    if not a or a=='' and b=='' then
+      code=416
+    elseif a=='' then
+      local suffix=tonumber(b)
+      if suffix<=0 or fsize==0 then code=416 else first=math.max(0,fsize-suffix) end
+    else
+      first=tonumber(a)
+      last=b=='' and last or math.min(tonumber(b),last)
+      if first>=fsize or last<first then code=416 end
+    end
+    if code~=416 then code=206 end
+  end
+  local length=code==416 and 0 or math.max(0,last-first+1)
+  local headers='Accept-Ranges: bytes\r\n'
+    ..(code==206 and 'Content-Range: bytes '..first..'-'..last..'/'..fsize..'\r\n' or
+       code==416 and 'Content-Range: bytes */'..fsize..'\r\n' or '')
+    ..(mg.request_info.request_method=='HEAD' and 'Content-Length: '..length..'\r\n' or '')
+  local written=mg.write(Response(code,mg.get_mime_type(fname),nil,length)..headers..'Content-Disposition: filename='..fname..'\r\n\r\n')
+  if written and code~=416 and mg.request_info.request_method~='HEAD' and f:seek('set',first) then
+    local remaining=length
+    while remaining>0 do
+      local buf=f:read(math.min(48128,remaining))
+      if not buf or #buf==0 or not mg.write(buf) then break end
+      remaining=remaining-#buf
     end
   end
   f:close()

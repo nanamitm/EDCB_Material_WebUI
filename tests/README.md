@@ -10,12 +10,14 @@ node --test tests/recinfo.test.cjs
 node --test tests/epg-onair.test.cjs
 node --test tests/search.test.cjs
 node --test tests/library.test.cjs
+node --test tests/streaming.test.cjs
 lua tests/common-api.lua
 lua tests/reservation.lua
 lua tests/autoadd.lua
 lua tests/recinfo.lua
 lua tests/search.lua
 lua tests/library.lua
+lua tests/streaming.lua
 ```
 
 JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
@@ -35,3 +37,7 @@ JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
 ビデオライブラリでは、一覧取得の応答競合・画面遷移・再生パラメータ、親階層の消失、
 TSパスの引用、チャプターのサイズ上限・読み込み失敗、自動サムネイル保存先の作成を検証します。
 外部コマンドとファイル操作はモック化し、実行しません。
+視聴配信では、動画情報・HLS開始待ちの競合、TS-Live初期化中の切替・破棄、
+HLS禁止設定、非HLS配信の画質・音声・シーク・倍速パラメータを検証します。
+仮想ファイルによるRange配信（通常・HEAD・部分・末尾・範囲外・切断）と、
+NetworkTV開始失敗時に新しいセッションを停止しないことも確認します。
