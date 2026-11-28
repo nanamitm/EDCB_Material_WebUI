@@ -73,10 +73,26 @@ local result=run(e)
 assert(result.err:find('/new.ts',1,true) and e.files['/old.ts']=='recreated file' and e.files['/new.ts']=='video A')
 print('PASS: concurrent destination creation and rollback collisions never overwrite existing files')
 
-e=env(); e.WIN32=false; e.edcb.RenameFileNoReplace=nil
-assert(run(e).err and e.moves==0 and e.pathWrites==0)
+-- POSIXのos.renameは移動先を上書きする
+local function posix(e)
+  e.WIN32=false; e.edcb.RenameFileNoReplace=nil
+  e.edcb.os.rename=function(a,b)
+    e.moves=e.moves+1
+    if e.onMove then e.onMove(a,b) end
+    if e.failFrom==a or not e.files[a] then return nil,'error' end
+    e.files[b]=e.files[a]; e.files[a]=nil; return true
+  end
+  return e
+end
+e=posix(env()); e.files['/old.ts.err']='errors'
+assert(run(e).success and e.dbpath=='/new.ts' and e.files['/new.ts']=='video A' and e.files['/new.ts.err']=='errors')
+e=posix(env()); e.files['/new.ts']='video B'
+assert(run(e).err and e.moves==0 and e.files['/new.ts']=='video B')
+e=posix(env()); e.pathResult=false; e.onPathWrite=function() e.files['/old.ts']='recreated file' end
+result=run(e)
+assert(result.err:find('/new.ts',1,true) and e.files['/old.ts']=='recreated file' and e.files['/new.ts']=='video A')
 e=env(); e.edcb.RenameFileNoReplace=nil
 assert(run(e).success and e.dbpath=='/new.ts')
 e=env(); e.files['/old.ts']=nil; e.files['/new.ts']='video'; e.pathResult=false
 assert(run(e).err and e.dbpath=='/old.ts' and e.moves==0)
-print('PASS: safe Windows fallback, unsupported POSIX backend and path-repair save failure')
+print('PASS: POSIX and Windows fallbacks move without overwriting, and path-repair save failure')
