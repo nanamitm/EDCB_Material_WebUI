@@ -207,6 +207,10 @@ document.addEventListener('alpine:init', () => {
     isOnline: false,
     isCellular: false,
     dataSaver: false,
+    refreshVersions: {},
+    eventSource: null,
+    sseHeartbeatTimer: null,
+    sseRetryTimer: null,
     isSmallScreen: false,
     isPortrait: false,
     networkNames: ['すべて', '地デジ', 'ワンセグ', 'BS', 'BS4K', 'CS', 'CS1', 'CS2', 'CS3', 'その他'],
@@ -736,7 +740,7 @@ document.addEventListener('alpine:init', () => {
 
       const toggleSSE = () => {
         if (this.dataSaver) {
-          if (this.eventSource) this.eventSource.close();
+          this.stopSSE();
         } else if (!this.eventSource || this.eventSource.readyState === EventSource.CLOSED) {
           this.startSSE();
         }
@@ -782,20 +786,34 @@ document.addEventListener('alpine:init', () => {
       this.inited = true;
     },
 
+    // 新しい取得が始まった後に、古い応答や保存処理を反映しないための世代チェック
+    beginRefresh(key) {
+      const version = (this.refreshVersions[key] || 0) + 1;
+      this.refreshVersions[key] = version;
+      return () => this.refreshVersions[key] === version;
+    },
+    stopSSE() {
+      clearTimeout(this.sseHeartbeatTimer);
+      clearTimeout(this.sseRetryTimer);
+      if (this.eventSource) {
+        this.eventSource.close();
+        this.loading = false;
+      }
+      this.eventSource = null;
+      this.isOnline = false;
+    },
     // SSEの開始とメッセージ処理
     startSSE() {
-      if (this.eventSource) {
-        this.isOnline = false;
-        this.eventSource.close();
-      }
+      this.stopSSE();
+      if (this.dataSaver) return;
 
       const TIMEOUT_LIMIT = 15000;
-      let timeoutId = null;
-
+      let source;
+      const isActive = () => this.eventSource === source && !this.dataSaver && source.readyState !== EventSource.CLOSED;
       const resetTimeout = () => {
-        clearTimeout(timeoutId);
-        timeoutId = setTimeout(() => {
-          this.isOnline = false;
+        clearTimeout(this.sseHeartbeatTimer);
+        this.sseHeartbeatTimer = setTimeout(() => {
+          if (isActive()) this.isOnline = false;
         }, TIMEOUT_LIMIT);
       }
 
@@ -806,62 +824,99 @@ document.addEventListener('alpine:init', () => {
         sseUrl.port = (currentPort + this.ssePortOffset).toString();
       }
 
-      this.eventSource = new EventSource(sseUrl.toString(), { withCredentials: true });
+      source = new EventSource(sseUrl.toString(), { withCredentials: true });
+      this.eventSource = source;
 
-      this.eventSource.onopen = async () => {
-        this.isOnline = true;
-
+      // 失敗した読み取りと処理中に届いた通知を保持する。更新APIの再送は行わない。
+      const pending = new Set();
+      let running = false;
+      let restoreAfterSync = false;
+      let retryDelay = 1000;
+      const syncTopic = async topic => {
+        if (topic === 'epg') return this.refreshEpg();
+        if (topic === 'tuner') return this.updateTunerStatus();
+        await this.refreshData(topic);
+        if (!isActive() || topic !== '#reserve') return;
+        this.allData.search.forEach((v, k) => {
+          if (!v.past) {
+            const r = this.allData.reserve.get(this.getEventID(v));
+            if (!r && v.reserveID) v.reserveID = null;
+            if (r) this.allData.search.set(k, { ...v, ...r });
+          }
+        });
+        if (this.isPage('#search')) this.updateDisplayList();
+        if (this.isPage('#epg')) this.loadEpg();
+        if (this.isPage('#epgweek')) await this.loadWeeklyEpg();
+      };
+      const syncPending = async () => {
+        if (running || !isActive() || pending.size === 0) return;
+        clearTimeout(this.sseRetryTimer);
+        const topics = [...pending];
+        pending.clear();
+        running = true;
         this.loading = true;
         try {
-          resetTimeout();
-          await Promise.all([
-            this.refreshData('#reserve'),
-            this.refreshData('#tunerreserve'),
-            this.refreshData('#recinfo'),
-            this.refreshData('#autoaddepg'),
-            this.refreshData('#autoaddmanual'),
-            this.updateTunerStatus(),
-            this.refreshEpg()
-          ]);
-          this.restoreSidePanel();
-        } catch (e) {
-          console.error("Reconnection sync failed", e);
-        } finally {
-          this.loading = false;
-        }
-      }
-      this.eventSource.onerror = () => {
-        this.isOnline = false;
-      }
-      this.eventSource.onmessage = async e => {
-        resetTimeout();
-        const data = JSON.parse(e.data);
-        if (data.ping) return;
-
-        // 通知が来たら pageMap に基づいて再取得
-        if (data.reserve) {
-          await Promise.all([
-            this.refreshData('#reserve'),
-            this.refreshData('#tunerreserve'),
-          ]);
-          this.allData.search.forEach((v, k) => {
-            if (!v.past) {
-              const r = this.allData.reserve.get(this.getEventID(v));
-              if (!r && v.reserveID) v.reserveID = null;
-              if (r) this.allData.search.set(k, { ...v, ...r })
-            };
+          const results = await Promise.allSettled(topics.map(syncTopic));
+          results.forEach((result, i) => {
+            if (result.status === 'rejected') {
+              pending.add(topics[i]);
+              console.error(`Sync failed for ${topics[i]}`, result.reason);
+            }
           });
-          if (this.isPage('#search')) this.updateDisplayList();
-          if (!data.epg) {
-            if (this.isPage('#epg')) this.loadEpg();
-            if (this.isPage('#epgweek')) this.loadWeeklyEpg();
+          if (isActive() && pending.size === 0 && restoreAfterSync) {
+            restoreAfterSync = false;
+            await this.restoreSidePanel();
+          }
+        } catch (e) {
+          console.error('Failed to restore side panel after sync', e);
+        } finally {
+          running = false;
+          if (this.eventSource === source) this.loading = false;
+          if (isActive()) {
+            if (pending.size > 0) {
+              this.sseRetryTimer = setTimeout(syncPending, retryDelay);
+              retryDelay = Math.min(retryDelay * 2, 30000);
+            } else {
+              retryDelay = 1000;
+            }
           }
         }
-        if (data.recinfo) this.refreshData('#recinfo');
-        if (data.auto_add) this.refreshData('#autoaddepg');
-        if (data.manual_add) this.refreshData('#autoaddmanual');
-        if (data.tuner) this.updateTunerStatus();
-        if (data.epg) await this.refreshEpg();
+      };
+      const queueSync = topics => {
+        topics.forEach(topic => pending.add(topic));
+        return syncPending();
+      };
+      source.onopen = () => {
+        if (!isActive()) return;
+        this.isOnline = true;
+        resetTimeout();
+        restoreAfterSync = true;
+        return queueSync(['#reserve', '#tunerreserve', '#recinfo', '#autoaddepg', '#autoaddmanual', 'tuner', 'epg']);
+      };
+      source.onerror = () => {
+        if (this.eventSource === source) this.isOnline = false;
+      };
+      source.onmessage = e => {
+        if (!isActive()) return;
+        let data;
+        try {
+          data = JSON.parse(e.data);
+          if (!data || typeof data !== 'object') return;
+        } catch (err) {
+          console.error('Invalid SSE message', err);
+          return;
+        }
+        resetTimeout();
+        this.isOnline = true;
+        if (data.ping) return;
+        const topics = [];
+        if (data.reserve !== undefined) topics.push('#reserve', '#tunerreserve');
+        if (data.recinfo !== undefined) topics.push('#recinfo');
+        if (data.auto_add !== undefined) topics.push('#autoaddepg');
+        if (data.manual_add !== undefined) topics.push('#autoaddmanual');
+        if (data.tuner) topics.push('tuner');
+        if (data.epg !== undefined) topics.push('epg');
+        return queueSync(topics);
       };
     },
 
@@ -878,10 +933,13 @@ document.addEventListener('alpine:init', () => {
     async refreshData(pageHash) {
       const config = this.pageMap[pageHash];
       if (!config || !config.api) return;
+      const isCurrent = this.beginRefresh(pageHash);
 
       try {
         const res = await this.fetch(`${this.ROOT}api/${config.api}?json=1${config.count ? `&count=${config.count}` : ''}`);
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
         const data = await res.json();
+        if (!isCurrent()) return;
 
         // データキー（items等）の特定
         const key = config.key || 'items';
@@ -906,13 +964,15 @@ document.addEventListener('alpine:init', () => {
         if (this.isPage(pageHash) || (this.isPage('#tunerreserve') && pageHash === '#reserve')) this.updateDisplayList();
 
         // キャッシュ保存
-        this.saveCache({ [internalKey]: list });
+        this.saveCache({ [internalKey]: list }, isCurrent);
       } catch (e) {
+        if (!isCurrent()) return;
         console.error(`Refresh failed for ${pageHash}`, e);
         throw e;
       }
     },
     async refreshEpg() {
+      const isCurrent = this.beginRefresh('epg');
       try {
         // 現在時刻の2時間前から取得を開始
         const d = new Date(this.now - 2 * 3600 * 1000);
@@ -928,9 +988,11 @@ document.addEventListener('alpine:init', () => {
 
         // tab=0でリクエストを1回だけ送り、全サービスの番組情報を取得する
         const res = await this.fetch(`${this.ROOT}api/EnumEventInfo?json=1&tab=0${rangeQuery}`);
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
 
         const list = await res.json();
 
+        if (!isCurrent()) return;
         if (list.err) throw new Error(list.err);
 
         const grouped = new Map();
@@ -943,24 +1005,39 @@ document.addEventListener('alpine:init', () => {
         });
 
         this.allData.epg = grouped;
+        // コアの更新前に取得した追加データや進行中の描画・取得も無効化する
+        this.epg.generation++;
+        this.epg.extraData.clear();
+        this.epg.weeklyCache.clear();
+        this.epg.weeklyLoadId++;
+        this.epg.fetchingWeekly = null;
 
         // リクエストした範囲をコアキャッシュの範囲に設定
         this.epg.cache = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour, 0, 0, 0).getTime();
 
         this.lastUpdated.epg = Date.now();
         this.updateNetworkMask();
-        this.saveEpgCache(grouped);
+        this.saveEpgCache(grouped, isCurrent);
 
         if (this.isPage('#epg')) this.loadEpg();
         if (this.isPage('#epgweek')) this.loadWeeklyEpg();
         this.syncNowOnAir();
       } catch (e) {
+        if (!isCurrent()) return;
         console.error("Failed to refresh epg", e);
         throw e;
       }
     },
     // 指定範囲のEPGを単発取得し、再利用可能な形でメモリに保持する
     async fetchEpgForRange(startTime) {
+      const tab = this.params.tab ?? 1;
+      const key = this.getEpgKey(startTime, tab);
+      const generation = this.epg.generation;
+      const isCurrent = this.beginRefresh(`epg-range:${key}`);
+      const isValid = () => isCurrent() && this.epg.generation === generation;
+      const isVisible = () => this.isPage('#epg') && this.getEpgKey(this.epg.epgStartTime) === key;
+      // 読み込み表示は最後に開始した取得だけが解除する（表示中のページには依存しない）
+      const ownsLoading = this.beginRefresh('epg-range-loading');
       this.loading = true;
       try {
         const d = new Date(startTime);
@@ -971,9 +1048,11 @@ document.addEventListener('alpine:init', () => {
           hour += 24;
         }
         const dateStr = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-        const res = await this.fetch(`${this.ROOT}api/EnumEventInfo?json=1&tab=${this.params.tab??1}&date=${dateStr}&hour=${hour}&interval=24`);
+        const res = await this.fetch(`${this.ROOT}api/EnumEventInfo?json=1&tab=${tab}&date=${dateStr}&hour=${hour}&interval=24`);
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
         const list = await res.json();
 
+        if (!isValid()) return;
         if (list.err) throw new Error(list.err);
 
         const grouped = new Map();
@@ -985,18 +1064,19 @@ document.addEventListener('alpine:init', () => {
         });
 
         // 再利用可能な形式で保存（例: '2026-1-1-4'）
-        const key = this.getEpgKey(startTime);
         this.epg.extraData.set(key, grouped);
-        this.loadEpg();
+        if (isVisible()) this.loadEpg();
       } catch (e) {
+        if (!isValid() || !isVisible()) return;
         console.error("Failed to fetch epg for range", e);
         this.epg.servicesToDisplay.forEach(s => s.displayEvents = []);
         this.snackbar.error('取得できませんでした');
       } finally {
-        this.loading = false;
+        if (ownsLoading()) this.loading = false;
       }
     },
     async refreshStaticData(snackbar) {
+      const isCurrent = this.beginRefresh('static');
       this.loading = true;
       try {
         // サービス一覧とプリセットを同時に取得
@@ -1005,6 +1085,7 @@ document.addEventListener('alpine:init', () => {
           this.fetch(`${this.ROOT}api/${this.pageMap['recpreset'].api}?json=1`).then(r => r.json())
         ]);
 
+        if (!isCurrent()) return;
         this.allData.service.clear();
         const services = serviceRes || [];
         services.forEach((s, i) => {
@@ -1033,13 +1114,14 @@ document.addEventListener('alpine:init', () => {
         this.lastUpdated.recpreset = Date.now();
 
         // キャッシュを更新
-        this.saveCache({ service: services, recpreset: presetRes || [] });
+        this.saveCache({ service: services, recpreset: presetRes || [] }, isCurrent);
         if (snackbar) this.snackbar.add('基礎データを更新しました');
       } catch (e) {
+        if (!isCurrent()) return;
         console.error("Failed to refresh static data", e);
         if (snackbar) this.snackbar.error('基礎データの取得ができませんでした');
       } finally {
-        this.loading = false;
+        if (isCurrent()) this.loading = false;
       }
     },
     async getData() {
@@ -1367,12 +1449,20 @@ document.addEventListener('alpine:init', () => {
       }
     },
     async updateTunerStatus() {
+      const isCurrent = this.beginRefresh('tuner');
       try {
-        const res = await this.fetch(`${this.ROOT}api/Common?json=1&tuner=1`).then(r => r.json());
+        const response = await this.fetch(`${this.ROOT}api/Common?json=1&tuner=1`);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const res = await response.json();
+        if (!isCurrent()) return;
         this.dashboardData.activeTuners = res.length;
         this.dashboardData.isRecording = res.some(t => t.recFlag === true);
         this.dashboardData.isEpgCap = res.some(t => t.epgCapFlag === true);
-      } catch (e) { console.error("Tuner update error:", e); }
+      } catch (e) {
+        if (!isCurrent()) return;
+        console.error("Tuner update error:", e);
+        throw e;
+      }
     },
 
     async loadMore() {
@@ -1505,40 +1595,38 @@ document.addEventListener('alpine:init', () => {
     },
 
     // EPG専用：refreshEpg()から直接呼び出す。
-    async saveEpgCache(grouped) {
+    async saveEpgCache(grouped, isCurrent = () => true) {
+      let db;
       try {
-        const db = await this.openCacheDB();
-        // 削除すべき古いサービスを特定するため既存キーを先取得
-        const existing = await new Promise((res, rej) => {
-          const r = db.transaction('epg', 'readonly').objectStore('epg').getAllKeys();
-          r.onsuccess = () => res(r.result);
-          r.onerror   = e => rej(e.target.error);
-        });
+        db = await this.openCacheDB();
+        if (!isCurrent()) return;
         const tx = db.transaction(['meta', 'epg'], 'readwrite');
         tx.objectStore('meta').put(this.metaSnapshot(), 'main');
         const epgStore = tx.objectStore('epg');
-        const current = new Set();
+        // 全置換を同じトランザクション内で行い、古いサービスを残さない
+        epgStore.clear();
         grouped.forEach((serviceMap, sid) => {
-          current.add(sid);
           epgStore.put(Array.from(serviceMap.entries()), sid); // [[eid, event], ...]
         });
-        existing.forEach(k => { if (!current.has(k)) epgStore.delete(k); });
         await new Promise((res, rej) => {
           tx.oncomplete = res;
           tx.onerror    = e => rej(e.target.error);
           tx.onabort    = e => rej(e.target.error);
         });
-        db.close();
       } catch (e) {
         console.warn('_saveEpgCache failed:', e);
+      } finally {
+        if (db) db.close();
       }
     },
 
     // 汎用キャッシュ保存。
     // data: { key: values[] } 形式。例: { reserve: list, recpreset: presets }
-    async saveCache(data) {
+    async saveCache(data, isCurrent = () => true) {
+      let db;
       try {
-        const db = await this.openCacheDB();
+        db = await this.openCacheDB();
+        if (!isCurrent()) return;
         const tx = db.transaction(['meta', 'data'], 'readwrite');
         tx.objectStore('meta').put(this.metaSnapshot(), 'main');
         const dataStore = tx.objectStore('data');
@@ -1548,9 +1636,10 @@ document.addEventListener('alpine:init', () => {
           tx.onerror    = e => rej(e.target.error);
           tx.onabort    = e => rej(e.target.error);
         });
-        db.close();
       } catch (e) {
         console.warn('saveCache failed:', e);
+      } finally {
+        if (db) db.close();
       }
     },
 
@@ -1955,6 +2044,7 @@ document.addEventListener('alpine:init', () => {
       lastLoadedNetwork: -1,
       cacheDays: 3,
       cache: 0,
+      generation: 0,
       extraData: new Map(), // 追加取得したデータの保管庫
       lastLoadedData: 0,
       lastLoadedReserve: 0,
@@ -2076,9 +2166,9 @@ document.addEventListener('alpine:init', () => {
         };
       },
     },
-    getEpgKey(time) {
+    getEpgKey(time, tab = this.params.tab ?? 1) {
       const d = new Date(time);
-      return `${this.params.tab}-${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}-${d.getHours()}`;
+      return `${tab}-${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}-${d.getHours()}`;
     },
     isGroupSub(e) {
       const list = e.eventGroupInfo?.eventDataList;
@@ -2253,6 +2343,7 @@ document.addEventListener('alpine:init', () => {
       const startTime = d.getTime();
       const dateStr = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
       const cacheKey = `${serviceId}-${dateStr}`;
+      const generation = this.epg.generation;
 
       // 同一キーの取得リクエストが進行中なら重複して走らせない
       if (this.epg.fetchingWeekly === cacheKey) return;
@@ -2272,10 +2363,12 @@ document.addEventListener('alpine:init', () => {
       const timeChanged = this.epg.lastLoadedWeeklyStart !== startTime;
 
       const currentWeeklyLoadId = ++this.epg.weeklyLoadId;
+      const dataChanged = this.epg.lastLoadedWeeklyGeneration !== generation;
       this.epg.lastLoadedWeeklyService = serviceId;
       this.epg.lastLoadedWeeklyStart = startTime;
       this.epg.lastLoadedWeeklyData = this.lastUpdated.epg;
       this.epg.lastLoadedWeeklyReserve = this.lastUpdated.reserve;
+      this.epg.lastLoadedWeeklyGeneration = generation;
 
       // 先にガワだけ作る（リアクティブな反映のため）
       if (this.epg.weeklyToDisplay.length !== 7 || serviceChanged || timeChanged) {
@@ -2298,7 +2391,7 @@ document.addEventListener('alpine:init', () => {
       const processEvents = events => {
         let index = 0;
         const processNext = () => {
-          if (this.epg.weeklyLoadId !== currentWeeklyLoadId) return;
+          if (this.epg.weeklyLoadId !== currentWeeklyLoadId || this.epg.generation !== generation) return;
 
           const dayStart = startTime + index * 24 * 3600 * 1000;
           const dayEnd = dayStart + 24 * 3600 * 1000;
@@ -2335,7 +2428,7 @@ document.addEventListener('alpine:init', () => {
 
           // 変更がある場合のみ個別の番組リストを更新（リアクティブ連鎖の抑制）
           const old = this.epg.weeklyToDisplay[index].displayEvents || [];
-          const isChanged = old.length !== displayEvents.length ||
+          const isChanged = dataChanged || old.length !== displayEvents.length ||
             displayEvents.some((v, i) => v.eid !== old[i]?.eid || v.minutes !== old[i]?.minutes ||
               (v.reserve?.reserveID !== old[i]?.reserve?.reserveID) ||
               (v.reserve?.recSetting.recEnabled !== old[i]?.reserve?.recSetting.recEnabled) ||
@@ -2359,17 +2452,16 @@ document.addEventListener('alpine:init', () => {
         return;
       }
 
+      // 読み込み表示は最後に開始した取得だけが解除する（EPG更新やページ移動で取得が破棄されても残さない）
+      const ownsLoading = this.beginRefresh('epg-weekly-loading');
       this.loading = true;
       try {
         // 指定されたサービスの1週間分(168時間)を取得
         const res = await this.fetch(`${this.ROOT}api/EnumEventInfo?json=1&id=${serviceId}&date=${dateStr}&hour=4&interval=168`);
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
         const list = await res.json();
-        this.loading = false;
 
-        if (this.epg.weeklyLoadId !== currentWeeklyLoadId) {
-          this.epg.fetchingWeekly = null;
-          return;
-        }
+        if (this.epg.weeklyLoadId !== currentWeeklyLoadId || this.epg.generation !== generation) return;
         if (list.err) throw new Error(list.err);
 
         const events = (Array.isArray(list) ? list : []).map(v => {
@@ -2380,11 +2472,12 @@ document.addEventListener('alpine:init', () => {
         this.epg.weeklyCache.set(cacheKey, events);
         processEvents(events);
       } catch (e) {
+        if (this.epg.weeklyLoadId !== currentWeeklyLoadId || this.epg.generation !== generation) return;
         console.error("Failed to load weekly EPG", e);
-        this.loading = false;
         this.snackbar.error('取得できませんでした');
       } finally {
-        this.epg.fetchingWeekly = null;
+        if (this.epg.weeklyLoadId === currentWeeklyLoadId) this.epg.fetchingWeekly = null;
+        if (ownsLoading()) this.loading = false;
       }
     },
     // ネットワーク（タブ）を切り替え、履歴に追加する
