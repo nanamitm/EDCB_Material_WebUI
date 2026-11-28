@@ -9,9 +9,10 @@ if post then
   if mg.get_var(post,'addchg') then
     aa.recSetting=GetRecSetting(post)
     if aa.recSetting then
-      aa.searchInfo=GetSearchKey(post)
-      done=edcb.AddOrChgAutoAdd(aa)
-      if done then
+      aa.searchInfo,err=GetSearchKey(post)
+      if not aa.searchInfo then
+        a={err=err}
+      elseif edcb.AddOrChgAutoAdd(aa) then
         a={success='EPG自動予約を'..(aa.dataID==0 and '追加' or '変更')..'しました'}
       else
         a={err='EPG自動予約を'..(aa.dataID==0 and '追加' or '変更')..'できませんでした'}

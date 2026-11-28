@@ -5,8 +5,10 @@
 node --test tests/common-api.test.cjs
 node --test tests/data-sync-cache.test.cjs
 node --test tests/reservation.test.cjs
+node --test tests/autoadd.test.cjs
 lua tests/common-api.lua
 lua tests/reservation.lua
+lua tests/autoadd.lua
 ```
 
 JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
@@ -15,3 +17,5 @@ JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
 世代管理、再取得、EPGキャッシュの無効化、タブ切替、接続停止・復旧を検証します。
 予約のテストでは、対象データの送信、プリセット置換、チューナー選択、詳細取得の競合、
 長時間・日またぎ予約と削除失敗の応答を検証します。
+自動予約のテストでは、プログラム予約フォーム、タイトルのテキスト表示、時刻・曜日の送信、
+時間絞り込みの入力検証と、入力エラー時にEDCBへ更新を送らないことを確認します。
