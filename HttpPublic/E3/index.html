@@ -1535,11 +1535,11 @@ ct:Append([=[
                     <div class="max">
                       <div class="title middle-align bold large-text">
                         <img class="logo space" :src="getLogoPath(d)">
-                        <span x-html="convert.title(d.title)"></span>
+                        <span x-text="d.title"></span>
                       </div>
                       <div class="row wrap tiny-space no-row-space no-margin secondary-text no-line">
                         <span class="middle-align"><i class="primary-text tiny">date_range</i><span x-text="dayText.filter((e, i) => (d.dayOfWeekFlag & 2 ** i))"></span></span>
-                        <span class="middle-align"><i class="primary-text tiny">schedule</i><span x-html="`${convert.time(d.startTime)} ～ ${convert.time(d.startTime + d.durationSecond)}`"></span></span>
+                        <span class="middle-align"><i class="primary-text tiny">schedule</i><span x-text="`${formatManualTime(d.startTime)} ～ ${formatManualTime(d.startTime + d.durationSecond)}`"></span></span>
                         <span class="middle-align"><i class="primary-text tiny">cell_tower</i><span x-text="d.stationName"></span></span>
                         <span class="middle-align"><i class="primary-text tiny">radio_button_checked</i><span x-text="recModeText[d.recSetting?.recMode]"></span>
                       </div>
@@ -1567,11 +1567,11 @@ ct:Append([=[
                 <tbody>
                   <template x-for="d in displayList" :key="d.dataID">
                     <tr class="ripple" @click="openAutoaddDetail(d)">
-                      <td><span x-html="convert.title(d.title)"></span></td>
+                      <td><span x-text="d.title"></span></td>
                       <td><span x-text="dayText.filter((e, i) => (d.dayOfWeekFlag & 2 ** i))"></span></td>
-                      <td><span x-html="getDateHtml(d, true)"></span></td>
-                      <td><span x-text="d.stationName"></span></td>
-                      <td class="right-align"><span x-text="recModeText[d.recSetting?.recMode]"></span></td>
+                      <td><span x-text="`${formatManualTime(d.startTime)} ～ ${formatManualTime(d.startTime + d.durationSecond)}`"></span></td>
+                      <td><span x-text="recModeText[d.recSetting?.recMode]"></span></td>
+                      <td class="right-align"><span x-text="d.recSetting?.priority"></span></td>
                     </tr>
                   </template>
                   <tr x-intersect="loadMore()"></tr>
@@ -4829,7 +4829,7 @@ ct:Append([=[
               </div>
             </template>
 
-            <template x-if="isMode('addmanual')">
+            <template x-if="isMode('autoaddmanual')">
               <div class="contents">
                 <input type="hidden" :value="`SetManuAdd?id=${d.dataID}`" id="api_action">
                 <input type="hidden" name="addchg" value="1">
@@ -4847,12 +4847,12 @@ ct:Append([=[
                     <nav class="s12 no-space center-align">
                       <div class="field label prefix border small left-round">
                         <i>schedule</i>
-                        <input type="time" name="startTime" step="1" :value="convert.time(d.startTime||0)">
+                        <input type="time" name="startTime" step="1" :value="formatManualTime(d.startTime||0)">
                         <label>開始時間</label>
                       </div>
                       <div class="field label prefix border small right-round">
                         <i>schedule</i>
-                        <input type="time" name="endTime" step="1" :value="convert.time((d.startTime||0) + (d.durationSecond||0))">
+                        <input type="time" name="endTime" step="1" :value="formatManualTime((d.startTime||0) + (d.durationSecond||0))">
                         <label>終了時間</label>
                       </div>
                     </nav>
@@ -5191,7 +5191,7 @@ ct:Append([=[
     <footer class="horizontal-padding light-align" x-show="detail.recSetting || isMode('recinfo','search')">
       <nav>
         <button type="button" class="primary" @click="openPage('#watch', { recid: detail.id })" x-show="isMode('recinfo')" :disabled="!detail.meta">再生</button>
-        <button type="button" class="primary" @click="saveEntry();if(isNewEntry)close();" x-show="!isMode('recinfo','search')"><i x-text="isNewEntry ? 'add' : 'save'">save</i><span x-text="isNewEntry ? '追加' : '変更'">変更</span></button>
+        <button type="button" class="primary" @click="if(saveEntry() && isNewEntry)close();" x-show="!isMode('recinfo','search')"><i x-text="isNewEntry ? 'add' : 'save'">save</i><span x-text="isNewEntry ? '追加' : '変更'">変更</span></button>
         <button type="button" class="primary" @click="searchEvent()" x-show="isMode('search')"><i>search</i><span>検索</span></button>
         <div class="max"></div>
         <button type="button" class="border" @click="delEntry();close();" x-show="!isNewEntry && !isMode('recinfo') || sets.RecinfoDel"><i>delete</i><span>削除</span></button>

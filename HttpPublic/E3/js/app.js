@@ -2904,6 +2904,24 @@ document.addEventListener('alpine:init', () => {
       this.sidePanel.show();
     },
 
+    formatManualTime(seconds) {
+      return this.convert.time(((seconds % 86400) + 86400) % 86400);
+    },
+    isValidManualTimes(start, end) {
+      const parse = value => {
+        const m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value || '');
+        return m && +m[1] < 24 && +m[2] < 60 && +(m[3] || 0) < 60
+          ? +m[1] * 3600 + +m[2] * 60 + +(m[3] || 0) : null;
+      };
+      const a = parse(start), b = parse(end);
+      return a !== null && b !== null && a !== b;
+    },
+    isValidTimeFilters(s) {
+      return (s?.dateList || []).every(e =>
+        ['startDayOfWeek', 'endDayOfWeek'].every(k => Number.isInteger(e[k]) && e[k] >= 0 && e[k] <= 6) &&
+        ['startHour', 'endHour'].every(k => Number.isInteger(e[k]) && e[k] >= 0 && e[k] < 24) &&
+        ['startMin', 'endMin'].every(k => Number.isInteger(e[k]) && e[k] >= 0 && e[k] < 60));
+    },
     isValidSearchRange(s) {
       if (!s || !s.archive) return true;
       if (!s.startDate || !s.startTime || !s.endDate || !s.endTime) return false;
@@ -2932,6 +2950,10 @@ document.addEventListener('alpine:init', () => {
         this.history = [ ...new Set([andKey, ...this.history]) ].slice(0, 10);
       } else {
         const s = this.sidePanel.s;
+        if (!this.isValidTimeFilters(s)) {
+          this.snackbar.error('時間絞り込みの曜日・時刻を正しく入力してください');
+          return;
+        }
         if (!this.isValidSearchRange(s)) {
           const isMissing = s.archive && (!s.startDate || !s.startTime || !s.endDate || !s.endTime);
           this.snackbar.error(isMissing ? 'アーカイブ検索の日時をすべて入力してください' : '開始日時は終了日時より前に設定してください');
@@ -2952,6 +2974,7 @@ document.addEventListener('alpine:init', () => {
         const res = await this.fetchWithToken(`${this.ROOT}api/SearchEvent?json=1`, { method: 'POST', body: fd }, 'searchevent', false, 20000);
         const list = await res.json();
 
+        if (list.err) throw new Error(list.err);
         this.allData.search.clear();
         (Array.isArray(list) ? list : []).forEach(v => {
           v.startTime = new Date(v.startTime).getTime();
@@ -3377,12 +3400,21 @@ document.addEventListener('alpine:init', () => {
       return fd
     },
     saveEntry() {
+      if (!this.isValidTimeFilters(this.sidePanel.s)) {
+        this.snackbar.error('時間絞り込みの曜日・時刻を正しく入力してください');
+        return false;
+      }
       const fd = this.getFormData(document.querySelector('#sidePanel'));
 
       const action = document.getElementById('api_action')?.value || '';
+      if (action.startsWith('SetManuAdd') && !this.isValidManualTimes(fd.get('startTime'), fd.get('endTime'))) {
+        this.snackbar.error('開始・終了時刻を正しく入力してください（同時刻は指定できません）');
+        return false;
+      }
       const url = `${this.ROOT}api/${action}`;
 
       this.apiFetch(url, fd);
+      return true;
     },
     delEntry() {
       const action = document.getElementById('api_action')?.value || '';

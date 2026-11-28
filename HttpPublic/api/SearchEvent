@@ -2,11 +2,19 @@
 dofile(mg.script_name:gsub('[^\\/]*$','')..'util.lua')
 
 post=AssertPost()
-key=post and GetSearchKey(post) or GetSearchKeyPreset(mg.request_info.query_string) or GetSearchKeyKeyword(mg.request_info.query_string)
+if post then
+  key,err=GetSearchKey(post)
+else
+  key=GetSearchKeyPreset(mg.request_info.query_string) or GetSearchKeyKeyword(mg.request_info.query_string)
+end
 
 json=GetVarInt(mg.request_info.query_string,'json',0,1)==1
 
 edcb.htmlEscape=json and 0 or 15
+if not key then
+  if json then ResponseJson({err=err}) else ResponseXml({err=err}) end
+  return
+end
 
 archive=GetVarInt(post, 'archive')==1
 a=SearchEpg(key,GetVarTimeRange(post),archive)

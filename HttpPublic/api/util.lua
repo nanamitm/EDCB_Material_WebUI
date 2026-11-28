@@ -1446,6 +1446,15 @@ function GetVarTime(qs,n,occ)
   return 0
 end
 
+--0時と解析失敗を区別して、1日の中の時刻を取得する
+function GetVarTimeOfDay(qs,n,occ)
+  local value=mg.get_var(qs,n,occ) or ''
+  local hour,min,sec=value:match('^(%d%d):(%d%d):(%d%d)$')
+  if not hour then hour,min=value:match('^(%d%d):(%d%d)$') end
+  hour,min,sec=tonumber(hour),tonumber(min),tonumber(sec) or 0
+  if hour and min and hour<24 and min<60 and sec<60 then return hour*3600+min*60+sec end
+end
+
 --クエリパラメータから日時を取得する
 function GetVarDate(qs,n,occ)
   local year,month,day=(mg.get_var(qs,n,occ) or ''):match('^(%d%d%d%d)%-(%d?%d)%-(%d?%d)$')
@@ -1796,21 +1805,27 @@ function GetSearchKey(post)
       table.insert(key.serviceList, {onid=onid, tsid=tsid, sid=sid})
     end
   end
-  if mg.get_var(post, 'dateList') then
-    for v in (mg.get_var(post,'dateList') or ''):gmatch('[^,]+') do
+  local dates=mg.get_var(post,'dateList') or ''
+  if #dates>0 then
+    for v in (dates..','):gmatch('(.-),') do
       local m={string.match(v, '^(.-)%-(%d+):(%d+)%-(.-)%-(%d+):(%d+)$')}
       if #m==6 then
         local dateInfo={
           startDayOfWeek=({['日']=0,['月']=1,['火']=2,['水']=3,['木']=4,['金']=5,['土']=6})[m[1]],
           endDayOfWeek=({['日']=0,['月']=1,['火']=2,['水']=3,['木']=4,['金']=5,['土']=6})[m[4]]
         }
-        if dateInfo.startDayOfWeek and dateInfo.endDayOfWeek then
+        if dateInfo.startDayOfWeek and dateInfo.endDayOfWeek and
+            tonumber(m[2])<24 and tonumber(m[3])<60 and tonumber(m[5])<24 and tonumber(m[6])<60 then
           dateInfo.startHour=0+m[2]
           dateInfo.startMin=0+m[3]
           dateInfo.endHour=0+m[5]
           dateInfo.endMin=0+m[6]
           table.insert(key.dateList, dateInfo)
+        else
+          return nil,'時間絞り込みの曜日・時刻が正しくありません'
         end
+      else
+        return nil,'時間絞り込みの曜日・時刻が正しくありません'
       end
     end
   end

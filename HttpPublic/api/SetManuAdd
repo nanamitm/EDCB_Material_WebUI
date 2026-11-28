@@ -15,8 +15,14 @@ if post then
           aa.dayOfWeekFlag=aa.dayOfWeekFlag*2+(GetVarInt(post,'checkDayOfWeek'..i)==1 and 1 or 0)
         end
       end
-      aa.startTime=GetVarTime(post, 'startTime')
-      aa.durationSecond=(GetVarTime(post, 'endTime')-aa.startTime)%(24*3600)
+      aa.startTime=GetVarTimeOfDay(post, 'startTime')
+      local endTime=GetVarTimeOfDay(post, 'endTime')
+      if not aa.startTime or not endTime or aa.startTime==endTime then
+        a={err='開始・終了時刻を正しく入力してください（同時刻は指定できません）'}
+        if GetVarInt(mg.request_info.query_string,'json')==1 then ResponseJson(a) else ResponseXml(a) end
+        return
+      end
+      aa.durationSecond=(endTime-aa.startTime)%(24*3600)
       aa.onid,aa.tsid,aa.sid=GetVarServiceID(post,'serviceID')
       if aa.onid then
         chInfo=BinarySearch(edcb.GetChDataList(),aa,CompareFields('onid',false,'tsid',false,'sid'))
