@@ -352,9 +352,13 @@ document.addEventListener('alpine:init', () => {
       return null;
     },
 
-    // CSRFトークン付きフェッチ（通信失敗時は処理済みの可能性があるため再送しない）
-    async fetchWithToken(url, options = {}, tokenKey = null, silent = false, timeoutMs = 5000) {
+    // CSRFトークン付きフェッチ
+    // 更新操作は通信失敗時に処理済みの可能性があるため再送しない。読み取り専用の要求のみ1回だけ再送する
+    async fetchWithToken(url, options = {}, tokenKey = null, silent = false, timeoutMs = 5000, isRetry = false) {
       const key = tokenKey || this.getTokenKey(url);
+      // サーバー側の状態を変更しないトークン種別
+      const readOnly = key === 'searchevent';
+      const maybeCommittedMessage = '応答を受信できませんでした。処理が完了している可能性があるため、一覧を確認してください';
 
       if (key) {
         const tokenVal = this.ctok[key] || '';
@@ -373,17 +377,31 @@ document.addEventListener('alpine:init', () => {
       } catch (e) {
         if (e.name === 'TimeoutError') {
           if (!silent) {
-            this.snackbar.error('通信エラー');
+            this.snackbar.error(key && !readOnly ? maybeCommittedMessage : '通信エラー');
             e.handled = true;
           }
           throw e;
         }
-        // トークン切れの可能性に備え次回操作用に更新するが、今回の要求は再送しない
+        // 呼び出し側による中断はそのまま返す
+        if (e.name === 'AbortError') throw e;
+        // トークン切れの可能性に備えて更新する
         if (key) {
+          let refreshed = false;
           try {
             await this.refreshCtok();
+            refreshed = true;
           } catch (tokErr) {
             console.warn('通信失敗後のトークン更新に失敗しました:', tokErr);
+          }
+          // 読み取り専用の要求は新しいトークンで1回だけ再送する
+          if (readOnly && refreshed && !isRetry) {
+            console.warn('通信失敗。トークンを更新して再試行します:', url, e);
+            return this.fetchWithToken(url, options, key, silent, timeoutMs, true);
+          }
+          // 更新操作は再送せず、処理済みの可能性を案内する
+          if (!readOnly && !silent) {
+            this.snackbar.error(maybeCommittedMessage);
+            e.handled = true;
           }
         }
         throw e;
@@ -1010,6 +1028,8 @@ document.addEventListener('alpine:init', () => {
       const isCurrent = this.beginRefresh(`epg-range:${key}`);
       const isValid = () => isCurrent() && this.epg.generation === generation;
       const isVisible = () => this.isPage('#epg') && this.getEpgKey(this.epg.epgStartTime) === key;
+      // 読み込み表示は最後に開始した取得だけが解除する（表示中のページには依存しない）
+      const ownsLoading = this.beginRefresh('epg-range-loading');
       this.loading = true;
       try {
         const d = new Date(startTime);
@@ -1044,7 +1064,7 @@ document.addEventListener('alpine:init', () => {
         this.epg.servicesToDisplay.forEach(s => s.displayEvents = []);
         this.snackbar.error('取得できませんでした');
       } finally {
-        if (isCurrent() && isVisible()) this.loading = false;
+        if (ownsLoading()) this.loading = false;
       }
     },
     async refreshStaticData(snackbar) {
@@ -2453,6 +2473,8 @@ document.addEventListener('alpine:init', () => {
         return;
       }
 
+      // 読み込み表示は最後に開始した取得だけが解除する（EPG更新やページ移動で取得が破棄されても残さない）
+      const ownsLoading = this.beginRefresh('epg-weekly-loading');
       this.loading = true;
       try {
         // 指定されたサービスの1週間分(168時間)を取得
@@ -2475,10 +2497,8 @@ document.addEventListener('alpine:init', () => {
         console.error("Failed to load weekly EPG", e);
         this.snackbar.error('取得できませんでした');
       } finally {
-        if (this.epg.weeklyLoadId === currentWeeklyLoadId) {
-          this.epg.fetchingWeekly = null;
-          this.loading = false;
-        }
+        if (this.epg.weeklyLoadId === currentWeeklyLoadId) this.epg.fetchingWeekly = null;
+        if (ownsLoading()) this.loading = false;
       }
     },
     // ネットワーク（タブ）を切り替え、履歴に追加する
