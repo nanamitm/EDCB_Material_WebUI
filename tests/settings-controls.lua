@@ -48,6 +48,13 @@ for _,invalid in ipairs({'1380--2-1','1380-16-1','11520-0-1','broken','1380--1-1
  assert(load(mutation,'Settings mutation','t',e))()
  assert(e.message and #e.writes==0 and not e.reloaded)
 end
+-- 画面の保存はEpgTimerSrvの各項目を1回の要求で送るため、他の項目も書き込まない
+local e=setup({srv='1',saveBasic='1',saveEpg='1',saveRec='1',saveReserve='1',saveOther='1',epgTime='1380-0-1,broken'});e.ALLOW_SETTING=true
+for _,name in ipairs({'SaveBasic','SaveRecFolder','SaveBon','SaveEpg','SaveEpgService','SaveRec','SaveNoSuspend','SaveReserve','SaveDelChk','SaveDelExt','SaveOther','SaveViewBon'}) do
+ e[name]=function() e.called=(e.called or '')..name..',' end
+end
+assert(load(mutation,'Settings mutation','t',e))()
+assert(e.message and #e.writes==0 and not e.reloaded and e.called==nil, e.called)
 print('PASS: default/common EPG schedule survives round trip; invalid schedules do not write or reload')
 
 local e=setup({recFolder={'/recordings','/archive'}})

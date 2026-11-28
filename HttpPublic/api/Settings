@@ -278,7 +278,8 @@ function GetEpgTime()
   return ret
 end
 
-function SaveEpgTime()
+--EPG取得時刻を検証して一覧を返す。不正な値があればmessageを設定してnilを返す
+function ParseEpgTime()
   local itemList={}
   local item=mg.get_var(post,'epgTime') or ''
   for v in item:gmatch('[^,]+') do
@@ -291,9 +292,15 @@ function SaveEpgTime()
       }
     else
       message='EPG取得時刻が不正です'
-      return false
+      return nil
     end
   end
+  return itemList
+end
+
+function SaveEpgTime(itemList)
+  itemList=itemList or ParseEpgTime()
+  if not itemList then return false end
   for i,v in ipairs(itemList) do
     edcb.WritePrivateProfile('EPG_CAP',i-1,
       ('%02d:%02d'):format(math.floor(v.weekMin/60)%24,v.weekMin%60)
@@ -1166,7 +1173,9 @@ if post then
   if not ALLOW_SETTING then
     message='設定変更は許可されていません'
   else
-    if GetVarInt(post,'srv')==1 then
+    -- 同じ要求の他の項目を書き込む前に検証し、不正なら何も書き込まない
+    local epgTimes=GetVarInt(post,'srv')==1 and GetVarInt(post,'saveEpg')==1 and ParseEpgTime() or nil
+    if GetVarInt(post,'srv')==1 and not message then
       network=nil
       if GetVarInt(post,'saveBasic')==1 then
         SaveBasic()
@@ -1174,10 +1183,9 @@ if post then
         SaveBon()
       end
       if GetVarInt(post,'saveEpg')==1 then
-        if SaveEpgTime()~=false then
-          SaveEpg()
-          SaveEpgService()
-        end
+        SaveEpgTime(epgTimes)
+        SaveEpg()
+        SaveEpgService()
       end
       if GetVarInt(post,'saveRec')==1 then
         SaveRec()

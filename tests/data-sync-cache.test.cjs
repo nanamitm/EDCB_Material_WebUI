@@ -154,6 +154,43 @@ test('a late range response cannot repopulate caches invalidated by core EPG ref
   assert.equal(app.epg.weeklyCache.size, 0);
 });
 
+test('leaving the EPG page during a range request does not leave the loading indicator on', async () => {
+  const { app } = setup(); const pending = deferred();
+  app.page = '#epg'; app.params.tab = 1; app.epg.epgStartTime = app.now;
+  app.fetch = () => pending.promise;
+  const task = app.fetchEpgForRange(app.now);
+  assert.equal(app.loading, true);
+  app.page = '#reserve';
+  pending.resolve(response([])); await task;
+  assert.equal(app.loading, false);
+  assert.equal(app.renders, 0);
+});
+
+test('an older range request does not clear the loading indicator of a newer one', async () => {
+  const { app } = setup(); const old = deferred(), latest = deferred(); let calls = 0;
+  app.page = '#epg'; app.params.tab = 1; app.epg.epgStartTime = app.now;
+  app.fetch = () => ++calls === 1 ? old.promise : latest.promise;
+  const a = app.fetchEpgForRange(app.now);
+  const b = app.fetchEpgForRange(app.now + 24 * 3600 * 1000);
+  old.resolve(response([])); await a;
+  assert.equal(app.loading, true);
+  latest.resolve(response([])); await b;
+  assert.equal(app.loading, false);
+});
+
+test('a weekly request discarded by an EPG refresh after leaving the page clears the loading indicator', async () => {
+  const { app } = setup(); const events = weeklySetup(app); const pending = deferred(); let calls = 0;
+  app.page = '#epgweek';
+  app.fetch = () => ++calls === 1 ? pending.promise : Promise.resolve(response([]));
+  const task = app.loadWeeklyEpg();
+  assert.equal(app.loading, true);
+  app.page = '#reserve';
+  await app.refreshEpg();
+  pending.resolve(response(events('old'))); await task;
+  assert.equal(app.loading, false);
+  assert.equal(app.epg.weeklyCache.size, 0);
+});
+
 function weeklySetup(app) {
   const d = new Date(app.now); d.setHours(4, 0, 0, 0);
   const date = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
