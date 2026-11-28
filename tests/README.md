@@ -13,6 +13,7 @@ node --test tests/library.test.cjs
 node --test tests/streaming.test.cjs
 node --test tests/player-datacast.test.cjs
 node --test tests/settings-controls.test.cjs
+node --test tests/spa-pwa.test.cjs
 lua tests/common-api.lua
 lua tests/reservation.lua
 lua tests/autoadd.lua
@@ -22,6 +23,7 @@ lua tests/library.lua
 lua tests/streaming.lua
 lua tests/player-datacast.lua
 lua tests/settings-controls.lua
+lua tests/spa-pwa.lua
 ```
 
 JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
@@ -51,3 +53,6 @@ NetworkTV開始失敗時に新しいセッションを停止しないことも�
 設定では、プリセットの削除対象・再採番後の編集対象・重複送信、設定・プラグイン・ログの応答競合、
 EPG取得時刻、初回の保存先変更、IPv4/IPv6とUDPブロードキャストの往復保存、
 不正な送信先による更新の拒否、郵便番号と実況パイプ設定の保持を検証します。
+SPA・PWAでは、履歴のクエリ保持、詳細復元の競合、局名のHTMLエスケープ、保存済み設定の検証、
+必須ファイルの事前キャッシュと失敗時の旧キャッシュ維持、通知とクリック時の画面復元、
+Luaで生成する起動設定のJSON・HTML属性境界を検証します。実通知は行いません。

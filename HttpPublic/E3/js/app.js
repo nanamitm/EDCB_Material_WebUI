@@ -199,6 +199,9 @@ document.addEventListener('alpine:init', () => {
     useDedicatedSsePort: config.useSsePort, // SSE専用ポートを使用するかどうか
     ssePortOffset: 10, // SSE専用ポートを使用する場合のオフセット (デフォルトは+10)
     page: window.location.hash || '#dashboard',
+    routeUrl: '',
+    sidePanelRestoreId: 0,
+    sidePanelRestoreTimer: null,
     params: {},
     search: { isDummy: true, searchInfo: {} },
     searchPresetList: config.searchPresetList || [],
@@ -407,6 +410,7 @@ document.addEventListener('alpine:init', () => {
 
     // リロードなしでページとパラメータを切り替える
     openPage(page, params = {}, replace = false, load = true) {
+      this.cancelSidePanelRestore?.();
       const url = new URL(window.location.href);
       url.hash = page;
       // パラメータをリセットして設定
@@ -416,6 +420,7 @@ document.addEventListener('alpine:init', () => {
       }
       if (replace) history.replaceState(null, '', url.toString());
       else history.pushState(null, '', url.toString());
+      this.routeUrl = window.location.href;
       this.page = page;
       this.updateParams();
       if (load) this.loadAll();
@@ -439,18 +444,30 @@ document.addEventListener('alpine:init', () => {
         }
       }
       if (changed) {
+        this.cancelSidePanelRestore?.();
         if (push) {
           history.pushState(null, '', url.toString());
         } else {
           history.replaceState(null, '', url.toString());
         }
         this.updateParams();
+        this.routeUrl = window.location.href;
       }
     },
 
+    cancelSidePanelRestore() {
+      this.sidePanelRestoreId++;
+      clearInterval(this.sidePanelRestoreTimer);
+      this.sidePanelRestoreTimer = null;
+    },
     // URLクエリパラメータからサイドパネルの状態を復元する
     async restoreSidePanel() {
+      this.cancelSidePanelRestore();
+      const restoreId = this.sidePanelRestoreId;
+      const detailRequestId = this.detailRequestId;
+      const page = this.page;
       const id = this.params.id;
+      const current = () => restoreId === this.sidePanelRestoreId && page === this.page && id === this.params.id && detailRequestId === this.detailRequestId;
       if (!id) {
         // id パラメータが無ければサイドパネルを閉じる
         if (this.sidePanel.el && this.sidePanel.el.open) {
@@ -478,7 +495,7 @@ document.addEventListener('alpine:init', () => {
       if (id.includes('-')) {
         // 番組ID形式
         const epgData = await this.getEpgById(id);
-        if (epgData) this.openProgramDetail(epgData);
+        if (current() && epgData) this.openProgramDetail(epgData);
       } else {
         // 数値ID形式
         const numId = parseInt(id);
@@ -500,6 +517,7 @@ document.addEventListener('alpine:init', () => {
         } else {
           // 予約IDとして復元を試みる (Mapのvaluesを走査して一致するreserveIDを探す)
           const getReserveAndOpen = () => {
+            if (!current()) return true;
             const reserves = Array.from(this.allData.reserve.values());
             const r = reserves.find(item => item.reserveID === numId);
             if (r) {
@@ -515,8 +533,10 @@ document.addEventListener('alpine:init', () => {
               attempts++;
               if (getReserveAndOpen() || attempts >= 15) {
                 clearInterval(timer);
+                if (this.sidePanelRestoreTimer === timer) this.sidePanelRestoreTimer = null;
               }
             }, 100);
+            this.sidePanelRestoreTimer = timer;
           }
         }
       }
@@ -549,8 +569,57 @@ document.addEventListener('alpine:init', () => {
       return { icon: 'lists', text: 'リスト' };
     },
 
+    handleLocationChange() {
+      if (this.routeUrl === window.location.href) return;
+      this.routeUrl = window.location.href;
+      this.cancelSidePanelRestore();
+      const newHash = window.location.hash || '#dashboard';
+      const newParams = Object.fromEntries(new URLSearchParams(window.location.search));
+      let changed = this.page !== newHash;
+      const keys = new Set([...Object.keys(this.params), ...Object.keys(newParams)]);
+      keys.delete('id');
+      for (const key of keys) if (this.params[key] !== newParams[key]) changed = true;
+      this.page = newHash;
+      if (!changed && this.isPage('#epgweek', '#watch')) {
+        const serviceId = id => id ? id.split('-').slice(0, 3).join('-') : '';
+        changed = serviceId(this.params.id) !== serviceId(newParams.id);
+      }
+      this.updateParams();
+      if (changed) this.loadAll();
+      else this.restoreSidePanel();
+    },
+    loadPreferences() {
+      let saved;
+      try {
+        saved = JSON.parse(localStorage.getItem('E3') || '{}');
+      } catch (e) {
+        console.warn('設定を復元できないため既定値を使用します:', e);
+        return {};
+      }
+      const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+      if (!object(saved)) return {};
+      const merge = (target, input) => {
+        for (const key of Object.keys(target)) {
+          if (!Object.hasOwn(input, key)) continue;
+          if (object(target[key])) {
+            if (object(input[key])) merge(target[key], input[key]);
+          } else if (typeof target[key] === typeof input[key] && (typeof input[key] !== 'number' || Number.isFinite(input[key]))) {
+            target[key] = input[key];
+          }
+        }
+      };
+      merge(this.sets, saved);
+      this.sets.player.volume = Math.min(1, Math.max(0, this.sets.player.volume));
+      if (!['auto', 'light', 'dark'].includes(this.sets.mode)) this.sets.mode = 'auto';
+      if (!/^#[0-9a-f]{6}$/i.test(this.sets.theme)) this.sets.theme = '#6750A4';
+      for (const key of Object.keys(this.sets.view)) {
+        if (!['list', 'table', 'grid'].includes(this.sets.view[key])) this.sets.view[key] = key === 'library' ? 'grid' : 'list';
+      }
+      return saved;
+    },
     async init() {
       this.updateParams();
+      this.routeUrl = window.location.href;
       this.$main = this.epg.$main = this.$refs.main;
       this.sidePanel.app = this;
       this.player.app = this;
@@ -577,23 +646,9 @@ document.addEventListener('alpine:init', () => {
       updateMedia();
 
       // 起動時に設定を復元
-      const savedSettings = localStorage.getItem('E3');
-      if (savedSettings) {
-        const settings = JSON.parse(savedSettings);
-        const deepMerge = (target, source) => {
-          for (const key in source) {
-            if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
-              if (!target[key]) target[key] = {};
-              deepMerge(target[key], source[key]);
-            } else {
-              target[key] = source[key];
-            }
-          }
-        };
-        deepMerge(this.sets, settings);
-        const xc = config.xcode.find(v => v.id === this.sets.player.quality);
-        if (xc) this.player.tslive = xc.tslive;
-      }
+      const savedSettings = this.loadPreferences();
+      const xc = config.xcode.find(v => v.id === this.sets.player.quality);
+      if (xc) this.player.tslive = xc.tslive;
 
       // 起動時にIndexedDBキャッシュから復元
       await this.loadCache();
@@ -608,7 +663,8 @@ document.addEventListener('alpine:init', () => {
 
       // 設定の変更を監視して自動保存
       this.$watch('sets', () => {
-        localStorage.setItem('E3', JSON.stringify(this.sets));
+        try { localStorage.setItem('E3', JSON.stringify(this.sets)); }
+        catch (e) { console.warn('設定を保存できませんでした:', e); }
       }, { deep: true });
 
       this.$watch('sets.oneseg', () => {
@@ -628,43 +684,15 @@ document.addEventListener('alpine:init', () => {
       this.epg.minDate = new Date(this.epg.minTime).toLocaleDateString('sv');
       this.epg.maxDate = new Date(this.epg.maxTime).toLocaleDateString('sv');
 
-      window.addEventListener('hashchange', () => {
-        // ページ移動時はクエリをリセット
-        if (window.location.search) history.replaceState(null, '', window.location.pathname + window.location.hash);
-        this.page = window.location.hash || '#dashboard';
-        this.updateParams();
-        this.loadAll();
-      });
-      window.addEventListener('popstate', () => {
-        const newHash = window.location.hash || '#dashboard';
-        const newParams = Object.fromEntries(new URLSearchParams(window.location.search));
-        let paramsChanged = this.page !== newHash;
-        this.page = newHash;
-
-        // id以外のすべてのパラメータの変化を自動チェック
-        const allKeys = new Set([...Object.keys(this.params), ...Object.keys(newParams)]);
-        allKeys.delete('id');
-        for (const k of allKeys) {
-          if (this.params[k] !== newParams[k]) {
-            paramsChanged = true;
-            break;
-          }
-        }
-
-        // idパラメータは #epgweek と #watch の場合のみ、サービスID部分（最初の3ブロック）の変化を監視
-        if (!paramsChanged && this.isPage('#epgweek', '#watch')) {
-          const getServiceId = id => id ? id.split('-').slice(0, 3).join('-') : '';
-          if (getServiceId(this.params.id) !== getServiceId(newParams.id)) {
-            paramsChanged = true;
-          }
-        }
-
-        this.updateParams();
-        if (paramsChanged) {
-          this.loadAll();
-        } else {
-          this.restoreSidePanel();
-        }
+      window.addEventListener('hashchange', () => this.handleLocationChange());
+      window.addEventListener('popstate', () => this.handleLocationChange());
+      document.addEventListener('click', event => {
+        if (event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+        const anchor = event.target.closest?.('a[href^="#"]');
+        const page = anchor?.getAttribute('href');
+        if (!page || !this.pageMap[page] || anchor.hasAttribute('download') || anchor.target && anchor.target !== '_self') return;
+        event.preventDefault();
+        this.openPage(page);
       });
       window.addEventListener('resize', () => {
         this.player.setbmlBrowserSize();
@@ -732,7 +760,7 @@ document.addEventListener('alpine:init', () => {
         connection.addEventListener('change', () => updateDataSaver());
       } else {
         // localStorage 未設定（初回・アップデート直後）の場合のみ false をデフォルトにする
-        const hasSavedDataSaver = savedSettings && JSON.parse(savedSettings)?.dataSaver !== undefined;
+        const hasSavedDataSaver = typeof savedSettings.dataSaver === 'boolean';
         if (!hasSavedDataSaver) this.sets.dataSaver = false;
         this.dataSaver = this.sets.dataSaver;
         toggleSSE();
@@ -1227,6 +1255,7 @@ document.addEventListener('alpine:init', () => {
     },
     // ページ切り替え時に呼ばれる
     async loadAll() {
+      this.cancelSidePanelRestore?.();
       this.library?.cancelLoad();
       this.player?.cancelLoad?.();
       if (this.searchLoading) {
@@ -1866,7 +1895,9 @@ document.addEventListener('alpine:init', () => {
       let s = '';
       if (d.searchInfo?.serviceList?.length > 0) {
         const v = d.searchInfo?.serviceList[0];
-        s = `<img class="space" src="${this.getLogoPath(v)}"><span>${this.getServiceName(v)}</span>`;
+        const escapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        const name = String(this.getServiceName(v) ?? '').replace(/[&<>"']/g, c => escapes[c]);
+        s = `<img class="space" src="${this.getLogoPath(v)}"><span>${name}</span>`;
       }
       if (d.searchInfo?.serviceList?.length > 1) {
         s += `<small>+${d.searchInfo.serviceList.length-1}ch</small>`
@@ -2626,6 +2657,7 @@ document.addEventListener('alpine:init', () => {
     detailRequestId: 0,
     detailFetchId: null,
     beginDetailRequest() {
+      this.cancelSidePanelRestore?.();
       if (this.detailFetchId != null) {
         this.detailFetchId = null;
         this.loading = false;
@@ -3284,30 +3316,30 @@ document.addEventListener('alpine:init', () => {
           }
         });
 
-        setInterval(() => {
+        setInterval(() => this.check(), 1000);
+      },
+      checking: false,
+      retryAfter: new Map(),
+      async check() {
+        if (this.checking) return;
+        this.checking = true;
+        let changed = false;
+        try {
           const now = Date.now();
-          let changed = false;
-          const nextList = [];
-
-          this.list.forEach(item => {
-            if (item.startTime - 30000 <= now) {
-              // 通知タイミングに到達、または既に過ぎている場合
-              if (!item.notified && now < item.startTime + 60000) {
-                this.notify(item);
-              }
-              // 通知した（あるいは通知ウィンドウを過ぎた）のでリストからは消去
+          for (const item of [...this.list]) {
+            if (item.startTime - 30000 > now || (this.retryAfter.get(item.id) || 0) > now) continue;
+            if (item.notified || now >= item.startTime + 60000 || await this.notify(item)) {
+              this.list = this.list.filter(v => v !== item);
+              this.retryAfter.delete(item.id);
               changed = true;
             } else {
-              // まだ開始前（30秒以上先）
-              nextList.push(item);
+              this.retryAfter.set(item.id, now + 10000);
             }
-          });
-
-          if (changed) {
-            this.list = nextList;
-            this.save();
           }
-        }, 1000);
+          if (changed) this.save();
+        } finally {
+          this.checking = false;
+        }
       },
       save() {
         localStorage.setItem('E3_reminders', JSON.stringify(this.list));
@@ -3331,20 +3363,34 @@ document.addEventListener('alpine:init', () => {
         this.save();
         this.app.snackbar.add('リマインダーを解除しました');
       },
-      notify(item) {
-        const n = new Notification(item.title, {
-          body: `${this.app.convert.date(item.startTime)}～ ${item.stationName}\n${item.text}`,
-          tag: item.id,
-          icon: './img/apple-touch-icon.png'
-        });
-        n.onclick = () => {
-          window.focus();
-          this.app.getEpgById(item.id).then(epg => {
-            if (epg) this.app.openProgramDetail(epg);
-          });
-          n.close();
-        };
-        setTimeout(() => n.close(), 15 * 1000);
+      async notify(item) {
+        try {
+          if (!('Notification' in window) || Notification.permission !== 'granted') return false;
+          const options = {
+            body: this.app.convert.date(item.startTime) + '～ ' + item.stationName + '\n' + (item.text || ''),
+            tag: item.id,
+            icon: new URL('./img/apple-touch-icon.png', window.location.href).href,
+          };
+          const registration = await navigator.serviceWorker?.getRegistration();
+          if (registration?.active) {
+            await registration.showNotification(item.title, { ...options, data: { eventId: item.id } });
+          } else {
+            const n = new Notification(item.title, options);
+            n.onclick = () => {
+              window.focus();
+              this.app.getEpgById(item.id).then(epg => {
+                if (epg) this.app.openProgramDetail(epg);
+              });
+              n.close();
+            };
+            setTimeout(() => n.close(), 15000);
+          }
+          return true;
+        } catch (e) {
+          console.error('通知に失敗しました:', e);
+          this.app.snackbar.error('通知を表示できませんでした');
+          return false;
+        }
       }
     },
 

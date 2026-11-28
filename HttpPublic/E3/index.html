@@ -31,7 +31,7 @@ ct:Append([=[
   <script src="js/alpine.min.js?ver=]=]..alpine..[=[" defer></script>
 </head>
 
-<body class="dark" x-data="edcbApp(]=]..GetAppConfig()..[=[)" :class="{ isSmallScreen: isSmallScreen, isPortrait: isPortrait }">
+<body class="dark" x-data="edcbApp(]=]..GetAppConfigAttribute()..[=[)" :class="{ isSmallScreen: isSmallScreen, isPortrait: isPortrait }">
   <nav class="m l surface-container left scroll" :class="{ 'max': sets.sidebar }">
     <header>
       <button class="extra circle transparent" @click="sets.sidebar = !sets.sidebar">
