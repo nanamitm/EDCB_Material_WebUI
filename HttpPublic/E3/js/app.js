@@ -347,9 +347,13 @@ document.addEventListener('alpine:init', () => {
       return null;
     },
 
-    // CSRFトークン付きフェッチ（通信失敗時は処理済みの可能性があるため再送しない）
-    async fetchWithToken(url, options = {}, tokenKey = null, silent = false, timeoutMs = 5000) {
+    // CSRFトークン付きフェッチ
+    // 更新操作は通信失敗時に処理済みの可能性があるため再送しない。読み取り専用の要求のみ1回だけ再送する
+    async fetchWithToken(url, options = {}, tokenKey = null, silent = false, timeoutMs = 5000, isRetry = false) {
       const key = tokenKey || this.getTokenKey(url);
+      // サーバー側の状態を変更しないトークン種別
+      const readOnly = key === 'searchevent';
+      const maybeCommittedMessage = '応答を受信できませんでした。処理が完了している可能性があるため、一覧を確認してください';
 
       if (key) {
         const tokenVal = this.ctok[key] || '';
@@ -368,17 +372,31 @@ document.addEventListener('alpine:init', () => {
       } catch (e) {
         if (e.name === 'TimeoutError') {
           if (!silent) {
-            this.snackbar.error('通信エラー');
+            this.snackbar.error(key && !readOnly ? maybeCommittedMessage : '通信エラー');
             e.handled = true;
           }
           throw e;
         }
-        // トークン切れの可能性に備え次回操作用に更新するが、今回の要求は再送しない
+        // 呼び出し側による中断はそのまま返す
+        if (e.name === 'AbortError') throw e;
+        // トークン切れの可能性に備えて更新する
         if (key) {
+          let refreshed = false;
           try {
             await this.refreshCtok();
+            refreshed = true;
           } catch (tokErr) {
             console.warn('通信失敗後のトークン更新に失敗しました:', tokErr);
+          }
+          // 読み取り専用の要求は新しいトークンで1回だけ再送する
+          if (readOnly && refreshed && !isRetry) {
+            console.warn('通信失敗。トークンを更新して再試行します:', url, e);
+            return this.fetchWithToken(url, options, key, silent, timeoutMs, true);
+          }
+          // 更新操作は再送せず、処理済みの可能性を案内する
+          if (!readOnly && !silent) {
+            this.snackbar.error(maybeCommittedMessage);
+            e.handled = true;
           }
         }
         throw e;

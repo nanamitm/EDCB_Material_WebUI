@@ -38,14 +38,62 @@ test('the EPG description uses the same escaped formatter', () => {
 
 function client(fetch) {
   return Object.assign(methods('    async fetchWithToken(', '    // クエリパラメータを解析'), {
-    ctok: { setautoadd: 'old' },
+    ctok: { setautoadd: 'old', searchevent: 'old' },
     getTokenKey: () => 'setautoadd',
     fetch,
     refreshes: 0,
-    async refreshCtok() { this.refreshes++; this.ctok.setautoadd = 'new'; },
-    snackbar: { error() {} },
+    async refreshCtok() { this.refreshes++; this.ctok = { setautoadd: 'new', searchevent: 'new' }; },
+    snackbar: { errors: [], error(text) { this.errors.push(text); } },
   });
 }
+const maybeCommitted = /処理が完了している可能性/;
+
+test('a lost mutation response tells the user it may have been processed', async () => {
+  const error = new TypeError('Connection lost');
+  const app = client(async () => { throw error; });
+  await assert.rejects(app.fetchWithToken('/api/SetAutoAdd', { method: 'POST', body: new URLSearchParams() }),
+    e => e === error && e.handled === true);
+  assert.equal(app.snackbar.errors.length, 1);
+  assert.match(app.snackbar.errors[0], maybeCommitted);
+});
+
+test('a mutation timeout tells the user it may have been processed', async () => {
+  const error = new DOMException('Timed out', 'TimeoutError');
+  const app = client(async () => { throw error; });
+  await assert.rejects(app.fetchWithToken('/api/SetAutoAdd', { method: 'POST', body: new URLSearchParams() }),
+    e => e.handled === true);
+  assert.match(app.snackbar.errors[0], maybeCommitted);
+});
+
+test('a read-only search is retried once with a refreshed token', async () => {
+  const tokens = [];
+  const app = client(async (url, options) => {
+    tokens.push(options.body.get('ctok'));
+    if (tokens.length === 1) throw new TypeError('Connection lost');
+    return { ok: true };
+  });
+  const res = await app.fetchWithToken('/api/SearchEvent?json=1', { method: 'POST', body: new URLSearchParams() }, 'searchevent');
+  assert.equal(res.ok, true);
+  assert.deepEqual(tokens, ['old', 'new']);
+  assert.equal(app.snackbar.errors.length, 0);
+});
+
+test('a read-only search is retried at most once and not after abort', async () => {
+  let calls = 0;
+  const error = new TypeError('Connection lost');
+  const app = client(async () => { calls++; throw error; });
+  await assert.rejects(app.fetchWithToken('/api/SearchEvent?json=1', { method: 'POST', body: new URLSearchParams() }, 'searchevent'),
+    e => e === error && !e.handled);
+  assert.equal(calls, 2);
+  assert.ok(!app.snackbar.errors.some(t => maybeCommitted.test(t)));
+
+  calls = 0;
+  const abort = new DOMException('Aborted', 'AbortError');
+  app.fetch = async () => { calls++; throw abort; };
+  await assert.rejects(app.fetchWithToken('/api/SearchEvent?json=1', { method: 'POST', body: new URLSearchParams() }, 'searchevent'),
+    e => e === abort);
+  assert.equal(calls, 1);
+});
 
 test('a lost response does not replay an already committed addition', async () => {
   let mutations = 0;
