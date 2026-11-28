@@ -15,10 +15,13 @@ function ChangeRecFilePath(ri,destination)
   if dst and not IsEqualPath(source,destination) then return {err='移動先にファイルが存在します'} end
   if source==destination then return {success='録画ファイルパスに変更はありません'} end
 
-  -- Windowsのos.renameは移動先があれば失敗する。POSIXのos.renameは上書きするため、移動の直前にも存在を確認する
-  -- （確認から移動までの間に作られたファイルは防げないが、従来と同等以上の安全性を保つ）
+  -- POSIXのos.renameは既存ファイルを上書きする。存在確認との競合を防げないため移動しない。
+  -- 外部で移動済みのパス修復と同一パスは上で処理済み。
+  if not WIN32 then
+    return {err='この環境では安全にファイルを移動できません。外部で移動してから録画ファイルパスを変更してください'}
+  end
+  -- Windowsのos.renameは移動先があれば失敗する。ロールバックにも同じ操作を使う。
   local function renameNoReplace(from,to)
-    if not WIN32 and EdcbFindFilePlain(to) then return false end
     return edcb.os.rename(from,to)
   end
   local moves={{from=source,to=destination}}

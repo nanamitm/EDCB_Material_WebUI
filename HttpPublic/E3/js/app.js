@@ -894,6 +894,14 @@ document.addEventListener('alpine:init', () => {
               console.error(`Sync failed for ${topics[i]}`, result.reason);
             }
           });
+          // EPG取得に失敗しても、取得済みの番組情報に成功した予約更新を反映する。
+          // 次回はEPGだけを再試行するため、予約側で省略した再描画をここで補う。
+          if (isActive() && withEpg && reserveTask &&
+              results[topics.indexOf('#reserve')].status === 'fulfilled' &&
+              results[topics.indexOf('epg')].status === 'rejected') {
+            if (this.isPage('#epg')) this.loadEpg();
+            if (this.isPage('#epgweek')) await this.loadWeeklyEpg();
+          }
           if (isActive() && pending.size === 0 && restoreAfterSync) {
             restoreAfterSync = false;
             await this.restoreSidePanel();
