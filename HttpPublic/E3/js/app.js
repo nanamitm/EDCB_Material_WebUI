@@ -347,9 +347,13 @@ document.addEventListener('alpine:init', () => {
       return null;
     },
 
-    // CSRFトークン付きフェッチ（エラー時に自動でトークンを再取得して1回だけ再試行）
+    // CSRFトークン付きフェッチ
+    // 更新操作は通信失敗時に処理済みの可能性があるため再送しない。読み取り専用の要求のみ1回だけ再送する
     async fetchWithToken(url, options = {}, tokenKey = null, silent = false, timeoutMs = 5000, isRetry = false) {
       const key = tokenKey || this.getTokenKey(url);
+      // サーバー側の状態を変更しないトークン種別
+      const readOnly = key === 'searchevent';
+      const maybeCommittedMessage = '応答を受信できませんでした。処理が完了している可能性があるため、一覧を確認してください';
 
       if (key) {
         const tokenVal = this.ctok[key] || '';
@@ -368,22 +372,32 @@ document.addEventListener('alpine:init', () => {
       } catch (e) {
         if (e.name === 'TimeoutError') {
           if (!silent) {
-            this.snackbar.error('通信エラー');
+            this.snackbar.error(key && !readOnly ? maybeCommittedMessage : '通信エラー');
             e.handled = true;
           }
           throw e;
         }
-        // トークン検証失敗(AssertCsrf)時の接続切断を想定して再取得＆リトライ
-        if (!isRetry && key) {
-          console.warn('通信失敗。トークンを再取得して再試行します:', url, e);
+        // 呼び出し側による中断はそのまま返す
+        if (e.name === 'AbortError') throw e;
+        // トークン切れの可能性に備えて更新する
+        if (key) {
+          let refreshed = false;
           try {
             await this.refreshCtok();
+            refreshed = true;
           } catch (tokErr) {
-            if (!silent) this.snackbar.error('トークン認証エラー。トークンの再取得に失敗しました');
-            tokErr.handled = true;
-            throw tokErr;
+            console.warn('通信失敗後のトークン更新に失敗しました:', tokErr);
           }
-          return this.fetchWithToken(url, options, key, silent, timeoutMs, true);
+          // 読み取り専用の要求は新しいトークンで1回だけ再送する
+          if (readOnly && refreshed && !isRetry) {
+            console.warn('通信失敗。トークンを更新して再試行します:', url, e);
+            return this.fetchWithToken(url, options, key, silent, timeoutMs, true);
+          }
+          // 更新操作は再送せず、処理済みの可能性を案内する
+          if (!readOnly && !silent) {
+            this.snackbar.error(maybeCommittedMessage);
+            e.handled = true;
+          }
         }
         throw e;
       }
@@ -1726,15 +1740,18 @@ document.addEventListener('alpine:init', () => {
       },
       text(a) {
         if (!a) return '';
-        const re = /https?:\/\/[\w?=&.\/-;#~%-]+(?![\w\s?&.\/;#~%"=-]*>)/g;
+        const escapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        const escape = value => value.replace(/[&<>"']/g, c => escapes[c]);
+        const re = /https?:\/\/[\w?=&.\/;#~%:+-]+/g;
         let s = '';
         let i = 0;
         for (let m; m = re.exec(a); i = re.lastIndex) {
-          s += `${a.substring(i, re.lastIndex - m[0].length)}`
-          s += `<a class="link underline" href="${m[0]}" target="_blank" rel="noreferrer">${m[0]}</a>`;
+          s += escape(a.substring(i, re.lastIndex - m[0].length));
+          const url = escape(m[0]);
+          s += `<a class="link underline" href="${url}" target="_blank" rel="noreferrer">${url}</a>`;
         }
-        s += `${a.substring(i)}`;
-        return s.replace(/\n/g, '<br>');
+        s += escape(a.substring(i));
+        return s.replace(/\r?\n/g, '<br>');
       },
       title(a) {
         return !a ? '' : `${a.replace(/　/g, ' ').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\[(新|終|再|交|映|手|声|多|字|二|Ｓ|Ｂ|SS|無|Ｃ|S1|S2|S3|MV|双|デ|Ｄ|Ｎ|Ｗ|Ｐ|HV|SD|天|解|料|前|後|初|生|販|吹|PPV|演|移|他|収)\]/g, '<span class="mark">$1</span>')}`

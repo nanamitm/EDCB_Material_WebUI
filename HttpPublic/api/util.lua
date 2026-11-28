@@ -2162,7 +2162,7 @@ function ConvertXml(val, key)
     end
     return '<'..key..'>'..table.concat(res)..'</'..key..'>'
   else
-    return '<'..key..'>'..(t=='boolean' and (t and '1' or '0') or EdcbHtmlEscape(tostring(val)))..'</'..key..'>'
+    return '<'..key..'>'..(t=='boolean' and (val and '1' or '0') or EdcbHtmlEscape(tostring(val)))..'</'..key..'>'
   end
 end
 
@@ -2197,8 +2197,8 @@ function ConvertJson(val)
     end
     if val.recNamePlugIn then
       local recNameDll, recNameOp=val.recNamePlugIn:match('^(.+%.'..(WIN32 and 'dll' or 'so')..')%?(.*)')
-      val.recNamePlugIn=recNameDll
-      val.recNameOp=recNameOp
+      val.recNamePlugIn=recNameDll or val.recNamePlugIn
+      val.recNameOp=recNameOp or ''
     end
     if val.batFilePath then
       local batFilePath, batFileTag=val.batFilePath:match('^([^*]*)%*?(.*)$')

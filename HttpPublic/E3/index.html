@@ -736,7 +736,7 @@ ct:Append([=[
                   </div>
                   <div class="max">
                     <div x-html="convert.title(d.shortInfo?.event_name)"></div>
-                    <div class="secondary-text small-text no-line" x-html="d.shortInfo?.text_char.replace(/\r?\n/g, '<br>')"></div>
+                    <div class="secondary-text small-text no-line" x-html="convert.text(d.shortInfo?.text_char)"></div>
                     <template x-if="!d.isGap && active === d.eid">
                       <div class="contents">
                         <div x-html="$refs.tools.innerHTML"></div>
