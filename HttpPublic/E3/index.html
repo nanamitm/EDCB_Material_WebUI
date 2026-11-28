@@ -559,7 +559,7 @@ ct:Append([=[
                     </div>
                   </div>
                   <template x-if="s.current">
-                    <progress class="absolute bottom left right" :value="getElapsedTime(s.current)" :max="s.current.durationSecond" value="0"></progress>
+                    <progress class="absolute bottom left right" x-show="Number.isFinite(s.current.durationSecond)" :value="getElapsedTime(s.current)" :max="s.current.durationSecond" value="0"></progress>
                   </template>
                 </article>
               </template>
@@ -737,7 +737,7 @@ ct:Append([=[
                   <div class="max">
                     <div x-html="convert.title(d.shortInfo?.event_name)"></div>
                     <div class="secondary-text small-text no-line" x-html="convert.text(d.shortInfo?.text_char)"></div>
-                    <template x-if="!d.isGap && active === d.eid">
+                    <template x-if="!d.isGap && active === getEventID(d)">
                       <div class="contents">
                         <div x-html="$refs.tools.innerHTML"></div>
                         <nav class="vertical tiny-space vertical-margin">
@@ -776,7 +776,7 @@ ct:Append([=[
               </div>
               <!-- 番組配置エリア -->
               <div class="relative" x-data="{ events: [] }" x-init="$nextTick(() => events = s.displayEvents); $watch('s.displayEvents', v => events = v)">
-                <template x-for="(d, idx) in events" :key="d.isGap ? 'gap-'+idx : d.eid">
+                <template x-for="(d, idx) in events" :key="d.isGap ? 'gap-'+idx : getEventID(d)">
                   <div x-html="$refs.epgEvent.innerHTML"></div>
                 </template>
               </div>
@@ -794,7 +794,7 @@ ct:Append([=[
               </div>
               <!-- 番組配置エリア -->
               <div class="relative" x-data="{ events: [] }" x-init="$nextTick(() => events = day.displayEvents); $watch('day.displayEvents', v => events = v)">
-                <template x-for="(d, idx) in events" :key="d.isGap ? 'gap-'+idx : d.eid">
+                <template x-for="(d, idx) in events" :key="d.isGap ? 'gap-'+idx : getEventID(d)">
                   <div x-html="$refs.epgEvent.innerHTML"></div>
                 </template>
               </div>
@@ -805,7 +805,7 @@ ct:Append([=[
     </template>
 
     <template x-if="isPage('#onair')">
-      <div class="absolute" x-data="{ onairNetwork: 1 }">
+      <div class="absolute" x-effect="ensureOnAirNetwork()">
         <nav class="tabbed small top-margin fixed">
           <template x-for="n in selectableNetworks" :key="n.index">
             <a :class="{ active: onairNetwork === n.index }" @click="onairNetwork = n.index">
@@ -834,7 +834,7 @@ ct:Append([=[
                         <template x-if="s.current">
                           <div>
                             <div class="title bold large-text" x-html="convert.title(s.current.shortInfo?.event_name)"></div>
-                            <progress class="no-margin" :value="getElapsedTime(s.current)" :max="s.current.durationSecond" value="0"></progress>
+                            <progress class="no-margin" x-show="Number.isFinite(s.current.durationSecond)" :value="getElapsedTime(s.current)" :max="s.current.durationSecond" value="0"></progress>
 
                             <template x-if="s.next">
                               <div class="row no-margin padding-top middle-align">
@@ -1138,7 +1138,7 @@ ct:Append([=[
                               <template x-if="s.current">
                                 <div>
                                   <div class="title bold large-text" x-html="convert.title(s.current.shortInfo?.event_name)"></div>
-                                  <progress class="no-margin" :value="getElapsedTime(s.current)" :max="s.current.durationSecond" value="0"></progress>
+                                  <progress class="no-margin" x-show="Number.isFinite(s.current.durationSecond)" :value="getElapsedTime(s.current)" :max="s.current.durationSecond" value="0"></progress>
                                 </div>
                               </template>
                               <template x-if="!s.current">
