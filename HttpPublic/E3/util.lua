@@ -1,5 +1,5 @@
-app='261128g'
-tsloader='260930'
+app='261128h'
+tsloader='261128'
 beer='5.0.3'
 mdc='1.1.4'
 alpine='3.15.12'
@@ -201,7 +201,7 @@ function GetbatFileTagList()
 end
 
 function GetPlayerOption(tslive)
-  return (tslive and '' or (ALWAYS_USE_HLS and ' alwaysUseHls' or '')..(USE_MP4_LLHLS and ' hls4="2"' or ''))
+  return (tslive and '' or (not ALLOW_HLS and ' noHls' or '')..(ALLOW_HLS and ALWAYS_USE_HLS and ' alwaysUseHls' or '')..(ALLOW_HLS and USE_MP4_LLHLS and ' hls4="2"' or ''))
     ..(ARIBB24_USE_SVG and ' data-aribb24-use-svg="1"' or '')..' data-aribb24-option-json="'..mg.url_encode(ARIBB24_OPTION_JSON)
 
     ..'" :data-comment-ctok="ctok.comment" data-custom-replace-json="'..mg.url_encode(JK_CUSTOM_REPLACE_JSON)..'" data-comment-api="{'..mg.url_encode('"jklog":"'..PathToRoot()..'api/jklog","comment":"'..PathToRoot()..'api/comment"}')

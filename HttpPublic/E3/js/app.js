@@ -1248,6 +1248,7 @@ document.addEventListener('alpine:init', () => {
     // ページ切り替え時に呼ばれる
     async loadAll() {
       this.library?.cancelLoad();
+      this.player?.cancelLoad?.();
       if (this.searchLoading) {
         this.searchLoading = false;
         this.loading = false;
@@ -3486,6 +3487,15 @@ document.addEventListener('alpine:init', () => {
     player: {
       video: null,
       videoInfo: null,
+      loadRequestId: 0,
+      loadingDetails: false,
+      cancelLoad() {
+        this.loadRequestId++;
+        if (this.loadingDetails) {
+          this.loadingDetails = false;
+          this.app.loading = false;
+        }
+      },
       get params() { return this.app.params },
       get nowOnAir() { return this.app.dashboardData.nowOnAir },
       get epg() {
@@ -3532,6 +3542,7 @@ document.addEventListener('alpine:init', () => {
 
       // ビデオ要素と対話するためのメソッド
       loadLive(id) {
+        this.cancelLoad();
         if (!this.vid) return;
         this.video.setAttribute('ctok', this.app.ctok.view);
         this.live = true;
@@ -3540,14 +3551,22 @@ document.addEventListener('alpine:init', () => {
         this.isLoading = true;
       },
       async loadVideo(d) {
+        this.cancelLoad();
         if (!this.vid) return;
+        d = { ...d };
+        const requestId = this.loadRequestId;
+        const player = this.vid;
+        const current = () => requestId === this.loadRequestId && player === this.vid && this.app.isPage('#watch');
+        Alpine.raw(player).reset();
+        this.isLoading = false;
         this.live = false;
         this.videoInfo = null;
+        this.skips = [];
 
         let fname;
         let canPlay;
         if (d.h) {
-          this.app.loading = true;
+          this.loadingDetails = this.app.loading = true;
           try {
             const p = new URLSearchParams();
             p.set('json', '1');
@@ -3556,7 +3575,10 @@ document.addEventListener('alpine:init', () => {
             if (d.d) p.set('d', d.d);
             if (d.p) d.p.split(',').filter(v => v).forEach(v => p.append('p', v));
             const res = await this.app.fetch(`${this.app.ROOT}api/Library?basic=0&${p.toString()}`);
-            const info = await res.json()
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const info = await res.json();
+            if (!current()) return;
+            if (info.err || !info.path) throw new Error(info.err || 'Missing video path');
             this.videoInfo = info;
             fname = info.path;
             canPlay = document.createElement('video').canPlayType(`video/${fname.match(/[^\.]*$/)}`).length > 0;
@@ -3564,9 +3586,10 @@ document.addEventListener('alpine:init', () => {
             const [chap, skips] = Alpine.raw(this.chap).setChapters(info.chapters, info.meta?.duration);
             this.skips = skips;
           } catch (e) {
+            if (!current()) return;
             console.error(e);
           } finally {
-            this.app.loading = false;
+            if (current()) this.loadingDetails = this.app.loading = false;
           }
         }
 
@@ -3574,7 +3597,6 @@ document.addEventListener('alpine:init', () => {
 
         this.video.setAttribute('ctok', this.app.ctok.xcode);
         const vid = Alpine.raw(this.vid);
-        vid.reset();
         if (this.thumb) Alpine.raw(this.thumb).reset();
         if (canPlay) {
           if (this.tslive) {
@@ -3611,6 +3633,7 @@ document.addEventListener('alpine:init', () => {
         this.isLoading = true;
       },
       reset() {
+        this.cancelLoad();
         Alpine.raw(this.vid).reset();
         if (this.chap) Alpine.raw(this.chap).reset();
         if (this.thumb) Alpine.raw(this.thumb).reset();

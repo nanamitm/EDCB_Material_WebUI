@@ -118,7 +118,11 @@ function OpenTranscoder(pipeName,searchName,nwtvclose,targetSID)
         edcb.Sleep(100)
       end
       -- 失敗。プロセスが残っていたら終わらせる
-      TerminateCommandlineLike('tsreadex',' -z edcb-legacy-'..searchName..' ')
+      local ok,pid,openID
+      if nwtvclose then ok,pid,openID=edcb.IsOpenNetworkTV(nwtvclose[1]) end
+      if not nwtvclose or ok and openID==nwtvclose[2] then
+        TerminateCommandlineLike('tsreadex',' -z edcb-legacy-'..searchName..' ')
+      end
     end
     return nil
   end
@@ -377,7 +381,8 @@ if onid then
             fname='view.'..output[1]
           end
           if not f then
-            edcb.CloseNetworkTV(n)
+            local ok,pid,openID=edcb.IsOpenNetworkTV(n)
+            if ok and openID==myOpenID then edcb.CloseNetworkTV(n) end
           end
         end
       end

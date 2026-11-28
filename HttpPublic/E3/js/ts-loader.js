@@ -36,6 +36,8 @@ const tsliveMixin = (Base = class {}) => class extends Base{
   #currentReader;
   #wakeLock;
   #ctrl;
+  #destroyed = false;
+  #pendingSrc = null;
   get #ctok(){return this.#e.getAttribute('ctok')};
   #params;
   constructor(video){
@@ -129,7 +131,9 @@ const tsliveMixin = (Base = class {}) => class extends Base{
 
   #createWasmModule(){
     navigator.gpu.requestAdapter().then(adapter => adapter.requestDevice().then(device => {
-      createWasmModule({preinitializedWebGPUDevice:device}).then(mod => {
+      if (this.#destroyed) { device.destroy(); return; }
+      return createWasmModule({preinitializedWebGPUDevice:device}).then(mod => {
+        if (this.#destroyed) { mod.pause(); device.destroy(); return; }
         this.#mod = mod;
         mod.setAudioGain(this.#muted?0:this.#volume);
         mod.setDetelecineMode(this.#detelecine);
@@ -137,6 +141,7 @@ const tsliveMixin = (Base = class {}) => class extends Base{
         mod.pause();
         mod.setCaptionCallback((pts,ts,data) => this.#cap&&this.#cap.pushRawData(this.#statsTime+ts,data.slice()));
         mod.setStatsCallback(stats => {
+          if (this.#destroyed) return;
           if(this.#statsTime!=stats[stats.length-1].time){
             this.#currentTime+=stats[stats.length-1].time-this.#statsTime;
             this.#statsTime=stats[stats.length-1].time;
@@ -160,11 +165,12 @@ const tsliveMixin = (Base = class {}) => class extends Base{
           this.#e.dispatchEvent(new Event('canplay'));	//疑似的、pauseしてると呼び出されない
           this.#done = true;
         });
+        if (this.#pendingSrc) this.#setSrc(this.#pendingSrc);
       });
     })).catch(e => {
+      if (this.#destroyed) return;
       this.#error = {code: 0, message: e.message};
       this.#e.dispatchEvent(new Event('error'));
-      throw e;
     });
   }
 
@@ -233,28 +239,36 @@ const tsliveMixin = (Base = class {}) => class extends Base{
     this.#cap&&this.#cap.detachMedia();
   }
   #reset(){
+    this.#pendingSrc = null;
+    this.#ctrl?.abort();
+    this.#ctrl = null;
+    this.#currentReader = null;
     this.#clear();
     this.#initialize();
     super.clear&&super.clear();
-    if (!this.#mod||!this.#ctrl) return;
+    if (!this.#mod) return;
     this.#pause();
     this.#mod.reset();
-    this.#ctrl.abort();
     //Androidでリセットすると再描画されないためとりあえず除外、モバイルでtsliveに対応してるのはAndroidのChromeだけなはずなのでisMobileで対応、他がwebgpu対応したら見直す
     if (navigator.userAgentData ? !navigator.userAgentData.mobile : !navigator.userAgent.match(/iPhone|iPad|Android.+Mobile/)) this.#e.getContext("webgpu").configure({device: this.#mod.preinitializedWebGPUDevice,format: navigator.gpu.getPreferredCanvasFormat(),alphaMode: "premultiplied",});
   }
   #destroy(){
+    this.#destroyed = true;
     this.#reset();
     this.#mod = null;
     this.#cap = null;
   }
 
   #setSrc(src){
-    if (!src || this.#isUnsupported()) return;
+    if (!src) { this.#pendingSrc = null; return; }
+    if (this.#destroyed || this.#isUnsupported()) return;
     if (!this.#mod){
-      setTimeout(() => this.#setSrc(src), 500);
+      this.#pendingSrc = src;
       return;
     }
+    this.#pendingSrc = null;
+    this.#currentReader = null;
+    this.#ctrl?.abort();
     this.#initialize();
     this.#e.setAttribute('src', src);
     this.#src = new URL(src, location.href);
@@ -364,6 +378,7 @@ const tsliveMixin = (Base = class {}) => class extends Base{
     }
   }
   #readNext(reader,ret){
+    if (reader !== this.#currentReader || this.#destroyed) return;
     if (reader==this.#currentReader&&ret&&ret.value){
       const inputLen=Math.min(ret.value.length,1e6);
       const buffer=this.#mod.getNextInputBuffer(inputLen);
@@ -390,6 +405,7 @@ const tsliveMixin = (Base = class {}) => class extends Base{
         }
       }else this.#readNext(reader,r);
     }).catch(e => {
+      if (reader !== this.#currentReader || this.#destroyed) return;
       if (reader==this.#currentReader){
         this.#currentReader=null;
         if (this.#wakeLock){
@@ -397,12 +413,14 @@ const tsliveMixin = (Base = class {}) => class extends Base{
           this.#wakeLock=null;
         }
       }
-      throw e;
+      this.#error = {code: this.#errorCode.NETWORK, message: e.message};
+      this.#e.dispatchEvent(new Event('error'));
     });
   }
   #startRead(){
-    this.#ctrl = new AbortController();
-    fetch(this.#src,{signal:this.#ctrl.signal}).then(response => {
+    const ctrl = this.#ctrl = new AbortController();
+    fetch(this.#src,{signal:ctrl.signal}).then(response => {
+      if (ctrl !== this.#ctrl || this.#destroyed) return;
       if (!response.ok){
         if (response.status == 404){
           this.#networkState = this.#networkStateCode.NO_SOURCE;
@@ -417,10 +435,15 @@ const tsliveMixin = (Base = class {}) => class extends Base{
       this.#readNext(this.#currentReader,null);
       //Prevent screen sleep
       if (!this.#wakeLock) this.#requestWakeLock();
+    }).catch(e => {
+      if (ctrl !== this.#ctrl || ctrl.signal.aborted || this.#destroyed) return;
+      this.#error = {code: this.#errorCode.NETWORK, message: e.message};
+      this.#e.dispatchEvent(new Event('error'));
     });
     ['ofssec','offset'].forEach(e => this.#src.searchParams.delete(e));
   }
   #resetRead(){
+    this.#currentReader = null;
     this.#ctrl.abort();
     this.#mod.reset();
     this.#startRead();
@@ -440,6 +463,7 @@ const hlsMixin = (Base = class {}) => class extends Base{
   get #ctok(){return this.#e.getAttribute('ctok')};
   #hlsMp4Query;
   #alwaysUseHls;
+  #noHls;
   #params;
   #fast;
   constructor(video){
@@ -457,6 +481,7 @@ const hlsMixin = (Base = class {}) => class extends Base{
     this.#initCap();
     this.#hlsMp4Query = this.#e.hasAttribute('hls4') ? `&hls4=${this.#e.getAttribute('hls4')}` : '';
     this.#alwaysUseHls = this.#e.hasAttribute('alwaysUseHls');
+    this.#noHls = this.#e.hasAttribute('noHls');
     this.#initHls();
     this.#e.addEventListener('loadedmetadata', () => {
       // 映像の幅と高さが0なら音声のみとみなす
@@ -496,28 +521,26 @@ const hlsMixin = (Base = class {}) => class extends Base{
   #hls;
   #onload;
   #initHls(){
-    if (this.#alwaysUseHls){
-      if (Hls.isSupported()){
-        this.#hls = new Hls({workerPath:"js/hls.worker.js"});
-        this.#hls.attachMedia(this.#e);
-        this.#hls.on(Hls.Events.MANIFEST_PARSED, () => {super.loadSubData?super.loadSubData():this.#e.dispatchEvent(new Event('streamStarted')); this.#cap&&this.#cap.attachMedia(this.#e);});
-        this.#hls.on(Hls.Events.FRAG_PARSING_METADATA, (each, data) => {if (this.#cap) for(const sample of data.samples) this.#cap.pushID3v2Data(sample.pts, sample.data);});
-
-        //Android版Firefoxは非キーフレームで切ったフラグメントMP4だとカクつくので避ける
-        this.#onload = () => this.#waitForHlsStart(`${this.#e.initSrc}&${this.#params.toString()}&hls=${this.#createRandom()}${/Android.+Firefox/i.test(navigator.userAgent)?'':this.#hlsMp4Query}`)
-          .then(src => this.#hls.loadSource(src))
-          .catch(this.#onerror);
-      }else if (this.#e.canPlayType('application/vnd.apple.mpegurl')){
-        this.#onload = () => this.#e.src = this.#e.initSrc.href;
-      }
+    if (!this.#noHls && this.#alwaysUseHls && Hls.isSupported()){
+      this.#hls = new Hls({workerPath:"js/hls.worker.js"});
+      this.#hls.attachMedia(this.#e);
+      this.#hls.on(Hls.Events.MANIFEST_PARSED, () => {super.loadSubData?super.loadSubData():this.#e.dispatchEvent(new Event('streamStarted')); this.#cap&&this.#cap.attachMedia(this.#e);});
+      this.#hls.on(Hls.Events.FRAG_PARSING_METADATA, (each, data) => {if (this.#cap) for(const sample of data.samples) this.#cap.pushID3v2Data(sample.pts, sample.data);});
+      //Android版Firefoxは非キーフレームで切ったフラグメントMP4だとカクつくので避ける
+      this.#onload = () => this.#waitForHlsStart(`${this.#e.initSrc}&${this.#params.toString()}&hls=${this.#createRandom()}${/Android.+Firefox/i.test(navigator.userAgent)?'':this.#hlsMp4Query}`,
+        src => this.#hls.loadSource(src));
     }else{
       //AndroidはcanPlayTypeが空文字列を返さないことがあるが実装に個体差が大きいので避ける
-      if (!/Android/i.test(navigator.userAgent)&&this.#e.canPlayType('application/vnd.apple.mpegurl')){
-        this.#onload = () => this.#waitForHlsStart(`${this.#e.initSrc}&${this.#params.toString()}&hls=${this.#createRandom()}${this.#hlsMp4Query}`)
-          .then(src => this.#e.src = src)
-          .catch(this.#onerror);
+      if (!this.#noHls && (this.#alwaysUseHls || !/Android/i.test(navigator.userAgent)) && this.#e.canPlayType('application/vnd.apple.mpegurl')){
+        this.#onload = () => this.#waitForHlsStart(`${this.#e.initSrc}&${this.#params.toString()}&hls=${this.#createRandom()}${this.#hlsMp4Query}`,
+          src => this.#e.src = src);
       }else{
-        this.#onload = () => this.#e.src = this.#e.initSrc.href;
+        this.#onload = () => {
+          this.#cancelHlsStart();
+          const src = new URL(this.#e.initSrc);
+          for (const [key, value] of this.#params) src.searchParams.set(key, value);
+          this.#e.src = src.href;
+        };
       }
     }
   }
@@ -553,7 +576,7 @@ const hlsMixin = (Base = class {}) => class extends Base{
   #ofssec = 0;
   #offset = 0;
   #reset(){
-    this.#src = '';
+    this.#cancelHlsStart();
     this.#hls&&this.#hls.loadSource('');
     this.#cap&&this.#cap.detachMedia();
     this.#ofssec = 0;
@@ -572,15 +595,17 @@ const hlsMixin = (Base = class {}) => class extends Base{
     super.clear&&super.clear();
   }
   #destroy(){
-    this.#reset();
+    this.#clear();
     this.#destroyHls();
     this.#cap = null;
   }
   #destroyHls(){
+    this.#cancelHlsStart();
     this.#hls&&this.#hls.destroy();
     this.#hls = null;
   }
   #loadSource(src){
+    this.#cancelHlsStart();
     if (!src){
       this.#clear();
       return;
@@ -680,40 +705,56 @@ const hlsMixin = (Base = class {}) => class extends Base{
     src = new URL(src, location.href);
     src.searchParams.set('ctok', this.#ctok);
     src.searchParams.set('load', this.#createRandom());
-    this.#waitForHlsStart(`${src}&${this.#params.toString()}&hls=${this.#createRandom()}${this.#hlsMp4Query}`)
-      .then(onstart).catch(onerror);
+    this.#waitForHlsStart(`${src}&${this.#params.toString()}&hls=${this.#createRandom()}${this.#hlsMp4Query}`, onstart, onerror);
   }
 
   #src;
+  #startVersion = 0;
+  #startController;
+  #startTimer;
   #interval = 200;
   #delay = 500;
   #onerror = () => {
     this.#error = {code: 0, message: 'HLS loading error'};
     this.#e.dispatchEvent(new Event('error'));
   }
-  #waitForHlsStart(src){
+  #cancelHlsStart(){
+    this.#startVersion++;
+    this.#startController?.abort();
+    this.#startController = null;
+    clearTimeout(this.#startTimer);
+    this.#startTimer = null;
+    this.#src = '';
+  }
+  #waitForHlsStart(src, onstart, onerror = this.#onerror){
+    this.#cancelHlsStart();
+    const version = this.#startVersion;
+    const controller = this.#startController = new AbortController();
+    const current = () => version === this.#startVersion && !controller.signal.aborted;
     this.#src = src;
-
-    return new Promise((resolve,reject) => {
-      let options = {
-        method: "POST",
-        headers: {"Content-Type": "application/x-www-form-urlencoded"},
-        body: `ctok=${this.#ctok}&open=1`
-      };
-      const poll = () => {
-        if (!this.#src) return;
-
-        fetch(src, options).then(response => {
-          if (response.ok) return response.text();
-          reject();
-        }).then(text => {
-          if (text.indexOf("#EXT-X-MEDIA-SEQUENCE:") < 0) setTimeout(poll, this.#interval);
-          else setTimeout(() => { resolve(src); }, this.#delay);
-        }).catch(() => { reject(); });
-      };
-      poll();
-      options=null;
-    });
+    let options = {
+      method: "POST",
+      headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      body: `ctok=${this.#ctok}&open=1`,
+      signal: controller.signal
+    };
+    const poll = async () => {
+      if (!current()) return;
+      try {
+        const request = options;
+        options = { signal: controller.signal };
+        const response = await fetch(src, request);
+        if (!current()) return;
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const text = await response.text();
+        if (!current()) return;
+        if (text.indexOf("#EXT-X-MEDIA-SEQUENCE:") < 0) this.#startTimer = setTimeout(poll, this.#interval);
+        else this.#startTimer = setTimeout(() => { if (current()) onstart(src); }, this.#delay);
+      } catch (e) {
+        if (current()) onerror(e);
+      }
+    };
+    poll();
   }
 }
 
