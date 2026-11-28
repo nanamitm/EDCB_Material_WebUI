@@ -4199,21 +4199,32 @@ document.addEventListener('alpine:init', () => {
     log: {
       data: [],
       debug: false,
+      requestId: 0,
+      opened: false,
       show(debug = false) {
+        this.opened = true;
         this.debug = debug;
         this.load();
         ui('#log');
       },
       close() {
+        this.opened = false;
+        this.requestId++;
         ui('#log');
         this.data = [];
         this.page = 0;
       },
       async load(page = 0) {
+        const requestId = ++this.requestId;
+        const debug = this.debug;
+        const current = () => this.opened && requestId === this.requestId;
+        this.data = [];
         try {
           this.page = page;
-          const res = await this.app.fetch(`${this.app.ROOT}api/showlog?c=10000&page=${page}${this.debug ? '&t=d' : ''}`);
+          const res = await this.app.fetch(`${this.app.ROOT}api/showlog?c=10000&page=${page}${debug ? '&t=d' : ''}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const text = await res.text();
+          if (!current()) return;
           const list = [];
           for (const line of text.split(/\r?\n/)) {
             if (!line.trim()) continue;
@@ -4251,6 +4262,7 @@ document.addEventListener('alpine:init', () => {
           this.data = list;
           document.querySelector('#log main').scrollTop = 0;
         } catch (e) {
+          if (!current()) return;
           console.error(e);
           this.data = [{ text: 'ログの取得ができませんでした' }];
         }
@@ -4286,12 +4298,16 @@ document.addEventListener('alpine:init', () => {
     },
 
     async saveSetting(container) {
+      if (this.settings.saving) return;
       const fd = this.getFormData(this.$refs[container]);
+      const current = this.beginRefresh('settings');
+      this.settings.saving = true;
 
       try {
         this.loading = true;
         const res = await this.fetchWithToken(`${this.ROOT}api/Settings`, { method: 'POST', body: fd }, 'settings');
         const data = await res.json();
+        if (!current()) return;
 
         if (data.err) {
           this.snackbar.error(data.err);
@@ -4301,31 +4317,40 @@ document.addEventListener('alpine:init', () => {
         this.settings.data = data;
         this.snackbar.add('保存しました');
       } catch (e) {
+        if (!current()) return;
         console.error('通信失敗:', e);
         if (!e.handled) this.snackbar.error('設定の保存に失敗しました');
       } finally {
-        this.loading = false;
+        this.settings.saving = false;
+        if (current()) this.loading = false;
       }
     },
     async loadSetting() {
+      if (this.settings.saving) return;
+      const current = this.beginRefresh('settings');
       try {
         this.loading = true;
         const res = await this.fetch(`${this.ROOT}api/Settings`);
-        this.settings.data = await res.json();
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (current()) this.settings.data = data;
       } catch (e) {
+        if (!current()) return;
         console.error(e);
         this.snackbar.error('設定の取得ができませんでした');
       } finally {
-        this.loading = false;
+        if (current()) this.loading = false;
       }
     },
     loadPreset(id) {
-      const preset = this.allData.recpreset.get(parseInt(id));
+      const preset = this.allData.recpreset.get(Number(id)) || this.allData.recpreset.get(0);
+      if (!preset) return;
       this.settings.r = this.clone(preset.recSetting);
-      this.settings.presetID = id;
+      this.settings.presetID = preset.id;
     },
     async removePreset() {
-      if (this.settings.presetID == 0) return;
+      if (this.settings.presetID == 0 || this.settings.presetSaving) return;
+      this.settings.presetSaving = true;
       const fd = new URLSearchParams({
         presetID: this.settings.presetID,
         del: 1,
@@ -4346,17 +4371,21 @@ document.addEventListener('alpine:init', () => {
         this.lastUpdated.recpreset = Date.now();
         this.saveCache({ recpreset: data });
 
+        this.loadPreset(0);
         this.snackbar.add('削除しました');
       } catch (e) {
         console.error('通信失敗:', e);
         if (!e.handled) this.snackbar.error('プリセットの削除に失敗しました');
       } finally {
+        this.settings.presetSaving = false;
         this.loading = false;
       }
     },
     async savePreset(add) {
+      if (this.settings.presetSaving) return;
       const fd = this.getFormData(this.$refs.recPreset);
       if (add) fd.append('add', 1);
+      this.settings.presetSaving = true;
 
       try {
         this.loading = true;
@@ -4378,6 +4407,7 @@ document.addEventListener('alpine:init', () => {
         console.error('通信失敗:', e);
         if (!e.handled) this.snackbar.error('プリセットの保存に失敗しました');
       } finally {
+        this.settings.presetSaving = false;
         this.loading = false;
       }
     },
@@ -4420,13 +4450,17 @@ document.addEventListener('alpine:init', () => {
     },
     async savePlugIn(mode) {
       const container = mode == 1 ? 'recNamePlugin' : 'writePlugin';
+      if (!this.settings[container] || this.settings.pluginSaving[mode]) return;
       const name = this.settings[container].name;
       const fd = this.getFormData(this.$refs[container]);
+      const current = this.beginRefresh(`plugin:${mode}`);
+      this.settings.pluginSaving[mode] = true;
 
       try {
         this.loading = true;
-        const res = await this.fetchWithToken(`${this.ROOT}api/Settings?plugin=1&mode=${mode}&item=${name}`, { method: 'POST', body: fd }, 'settings');
+        const res = await this.fetchWithToken(`${this.ROOT}api/Settings?plugin=1&mode=${mode}&item=${encodeURIComponent(name)}`, { method: 'POST', body: fd }, 'settings');
         const data = await res.json();
+        if (!current()) return;
 
         if (data.err) {
           this.snackbar.error(data.err);
@@ -4436,28 +4470,40 @@ document.addEventListener('alpine:init', () => {
         this.parsePlugin(data, mode);
         this.snackbar.add('保存しました');
       } catch (e) {
+        if (!current()) return;
         console.error('通信失敗:', e);
         if (!e.handled) this.snackbar.error('プラグインの保存に失敗しました');
       } finally {
-        this.loading = false;
+        this.settings.pluginSaving[mode] = false;
+        if (current()) this.loading = false;
       }
     },
     async loadPlugIn(mode, name) {
+      const current = this.beginRefresh(`plugin:${mode}`);
+      const container = mode == 1 ? 'recNamePlugin' : 'writePlugin';
+      this.settings[container] = null;
       try {
         this.loading = true;
-        const res = await this.fetch(`${this.ROOT}api/Settings?plugin=1&mode=${mode}&item=${name}`);
+        const res = await this.fetch(`${this.ROOT}api/Settings?plugin=1&mode=${mode}&item=${encodeURIComponent(name)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
+        if (!current()) return;
+        if (data.err || data.name !== name) throw new Error(data.err || 'Unexpected plugin');
 
         this.parsePlugin(data, mode);
       } catch (e) {
+        if (!current()) return;
         console.error(e);
         this.snackbar.error('設定の取得ができませんでした');
       } finally {
-        this.loading = false;
+        if (current()) this.loading = false;
       }
     },
     settings: {
       data: null,
+      saving: false,
+      presetSaving: false,
+      pluginSaving: {},
       tab: 'webui',
       presetTab: 0,
       r: null,
@@ -4479,7 +4525,7 @@ document.addEventListener('alpine:init', () => {
       },
 
       regionToZip() {
-        this.data.webui.nvram.zip = this.nvramRegion[this.data.webui.nvram.region]?.zip || '';
+        this.data.nvram.zip = this.nvramRegion[this.data.nvram.region]?.zip || '';
       },
       moveList(list, index, offset) {
         const newIndex = index + offset;

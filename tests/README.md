@@ -12,6 +12,7 @@ node --test tests/search.test.cjs
 node --test tests/library.test.cjs
 node --test tests/streaming.test.cjs
 node --test tests/player-datacast.test.cjs
+node --test tests/settings-controls.test.cjs
 lua tests/common-api.lua
 lua tests/reservation.lua
 lua tests/autoadd.lua
@@ -20,6 +21,7 @@ lua tests/search.lua
 lua tests/library.lua
 lua tests/streaming.lua
 lua tests/player-datacast.lua
+lua tests/settings-controls.lua
 ```
 
 JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
@@ -46,3 +48,6 @@ NetworkTV開始失敗時に新しいセッションを停止しないことも�
 プレイヤー・字幕・データ放送・実況では、字幕表示設定の維持、チャプター操作のイベント解除、
 補助ストリーム・ログ・PSC取得の競合と終了、再接続の上限、実況開始日時、
 メタデータ確定後の再生時間送信、過去ログ取得・インポートの失敗応答を検証します。
+設定では、プリセットの削除対象・再採番後の編集対象・重複送信、設定・プラグイン・ログの応答競合、
+EPG取得時刻、初回の保存先変更、IPv4/IPv6とUDPブロードキャストの往復保存、
+不正な送信先による更新の拒否、郵便番号と実況パイプ設定の保持を検証します。
