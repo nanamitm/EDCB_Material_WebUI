@@ -11,6 +11,7 @@ node --test tests/epg-onair.test.cjs
 node --test tests/search.test.cjs
 node --test tests/library.test.cjs
 node --test tests/streaming.test.cjs
+node --test tests/player-datacast.test.cjs
 lua tests/common-api.lua
 lua tests/reservation.lua
 lua tests/autoadd.lua
@@ -18,6 +19,7 @@ lua tests/recinfo.lua
 lua tests/search.lua
 lua tests/library.lua
 lua tests/streaming.lua
+lua tests/player-datacast.lua
 ```
 
 JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
@@ -41,3 +43,6 @@ TSパスの引用、チャプターのサイズ上限・読み込み失敗、自
 HLS禁止設定、非HLS配信の画質・音声・シーク・倍速パラメータを検証します。
 仮想ファイルによるRange配信（通常・HEAD・部分・末尾・範囲外・切断）と、
 NetworkTV開始失敗時に新しいセッションを停止しないことも確認します。
+プレイヤー・字幕・データ放送・実況では、字幕表示設定の維持、チャプター操作のイベント解除、
+補助ストリーム・ログ・PSC取得の競合と終了、再接続の上限、実況開始日時、
+メタデータ確定後の再生時間送信、過去ログ取得・インポートの失敗応答を検証します。

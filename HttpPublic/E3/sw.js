@@ -1,4 +1,4 @@
-const CACHE_NAME = 'e3-pwa-cache-v13';
+const CACHE_NAME = 'e3-pwa-cache-v14';
 const ASSETS = [
   './',
   './index.html',
