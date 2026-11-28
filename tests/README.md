@@ -7,4 +7,4 @@ lua tests/common-api.lua
 ```
 
 JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
-フロントのHTML変換・通信失敗時の非再送と、LuaのJSON/XML変換を検証します。
+フロントのHTML変換・通信失敗時の非再送（検索のみ1回再送）と処理済み可能性の案内、LuaのJSON/XML変換を検証します。
