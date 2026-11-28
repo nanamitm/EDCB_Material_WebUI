@@ -347,8 +347,8 @@ document.addEventListener('alpine:init', () => {
       return null;
     },
 
-    // CSRFトークン付きフェッチ（エラー時に自動でトークンを再取得して1回だけ再試行）
-    async fetchWithToken(url, options = {}, tokenKey = null, silent = false, timeoutMs = 5000, isRetry = false) {
+    // CSRFトークン付きフェッチ（通信失敗時は処理済みの可能性があるため再送しない）
+    async fetchWithToken(url, options = {}, tokenKey = null, silent = false, timeoutMs = 5000) {
       const key = tokenKey || this.getTokenKey(url);
 
       if (key) {
@@ -373,17 +373,13 @@ document.addEventListener('alpine:init', () => {
           }
           throw e;
         }
-        // トークン検証失敗(AssertCsrf)時の接続切断を想定して再取得＆リトライ
-        if (!isRetry && key) {
-          console.warn('通信失敗。トークンを再取得して再試行します:', url, e);
+        // トークン切れの可能性に備え次回操作用に更新するが、今回の要求は再送しない
+        if (key) {
           try {
             await this.refreshCtok();
           } catch (tokErr) {
-            if (!silent) this.snackbar.error('トークン認証エラー。トークンの再取得に失敗しました');
-            tokErr.handled = true;
-            throw tokErr;
+            console.warn('通信失敗後のトークン更新に失敗しました:', tokErr);
           }
-          return this.fetchWithToken(url, options, key, silent, timeoutMs, true);
         }
         throw e;
       }
@@ -1726,15 +1722,18 @@ document.addEventListener('alpine:init', () => {
       },
       text(a) {
         if (!a) return '';
-        const re = /https?:\/\/[\w?=&.\/-;#~%-]+(?![\w\s?&.\/;#~%"=-]*>)/g;
+        const escapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        const escape = value => value.replace(/[&<>"']/g, c => escapes[c]);
+        const re = /https?:\/\/[\w?=&.\/;#~%:+-]+/g;
         let s = '';
         let i = 0;
         for (let m; m = re.exec(a); i = re.lastIndex) {
-          s += `${a.substring(i, re.lastIndex - m[0].length)}`
-          s += `<a class="link underline" href="${m[0]}" target="_blank" rel="noreferrer">${m[0]}</a>`;
+          s += escape(a.substring(i, re.lastIndex - m[0].length));
+          const url = escape(m[0]);
+          s += `<a class="link underline" href="${url}" target="_blank" rel="noreferrer">${url}</a>`;
         }
-        s += `${a.substring(i)}`;
-        return s.replace(/\n/g, '<br>');
+        s += escape(a.substring(i));
+        return s.replace(/\r?\n/g, '<br>');
       },
       title(a) {
         return !a ? '' : `${a.replace(/　/g, ' ').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\[(新|終|再|交|映|手|声|多|字|二|Ｓ|Ｂ|SS|無|Ｃ|S1|S2|S3|MV|双|デ|Ｄ|Ｎ|Ｗ|Ｐ|HV|SD|天|解|料|前|後|初|生|販|吹|PPV|演|移|他|収)\]/g, '<span class="mark">$1</span>')}`
