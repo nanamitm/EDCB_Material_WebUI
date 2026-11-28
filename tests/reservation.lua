@@ -40,6 +40,12 @@ assert(not program('2026-11-28','10:00','2026-11-28','09:00'))
 assert(not program('2026-11-28','10:00','2026-11-28','10:00'))
 assert(not program('2026-11-28','10:00','2026-11-31','10:00'))
 assert(not program('2026-11-28','25:00','2026-11-29','10:00'))
+-- 外部クライアントの1桁表記も受け付け、範囲外は従来どおり拒否する
+assert(program('2026-1-5','9:05','2026-1-5','9:35').durationSecond==1800)
+assert(program('2026-1-5','9:05:00',nil,'0:05:00').durationSecond==54000)
+assert(not program('2026-1-32','9:00','2026-2-1','10:00'))
+assert(not program('2026-13-1','9:00','2026-13-1','10:00'))
+assert(not program('2026-1-5','9:60','2026-1-5','10:00'))
 print('PASS: 24/25/48-hour and legacy overnight reservations; invalid dates rejected')
 
 for _,success in ipairs({true,false}) do

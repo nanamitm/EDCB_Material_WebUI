@@ -1449,8 +1449,8 @@ end
 --0時と解析失敗を区別して、1日の中の時刻を取得する
 function GetVarTimeOfDay(qs,n,occ)
   local value=mg.get_var(qs,n,occ) or ''
-  local hour,min,sec=value:match('^(%d%d):(%d%d):(%d%d)$')
-  if not hour then hour,min=value:match('^(%d%d):(%d%d)$') end
+  local hour,min,sec=value:match('^(%d%d?):(%d%d?):(%d%d?)$')
+  if not hour then hour,min=value:match('^(%d%d?):(%d%d?)$') end
   hour,min,sec=tonumber(hour),tonumber(min),tonumber(sec) or 0
   if hour and min and hour<24 and min<60 and sec<60 then return hour*3600+min*60+sec end
 end

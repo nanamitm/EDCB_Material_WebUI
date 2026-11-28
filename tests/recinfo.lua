@@ -20,7 +20,7 @@ local function env()
     if e.failFrom==a or not e.files[a] or e.files[b] then return false end
     e.files[b]=e.files[a]; e.files[a]=nil; return true
   end
-  e.edcb={os={rename=rename},RenameFileNoReplace=rename,
+  e.edcb={os={rename=rename},
     GetRecFileInfoBasic=function() return {id=1,recFilePath=e.dbpath,protectFlag=e.protected} end,
     GetPrivateProfile=function() return e.infoFolder or '' end,
     ChgProtectRecFileInfo=function(id,value) if e.protectResult~=false then e.protected=value end; return e.protectResult end,
@@ -75,7 +75,7 @@ print('PASS: concurrent destination creation and rollback collisions never overw
 
 -- POSIXのos.renameは移動先を上書きする
 local function posix(e)
-  e.WIN32=false; e.edcb.RenameFileNoReplace=nil
+  e.WIN32=false
   e.edcb.os.rename=function(a,b)
     e.moves=e.moves+1
     if e.onMove then e.onMove(a,b) end
@@ -91,7 +91,7 @@ assert(run(e).err and e.moves==0 and e.files['/new.ts']=='video B')
 e=posix(env()); e.pathResult=false; e.onPathWrite=function() e.files['/old.ts']='recreated file' end
 result=run(e)
 assert(result.err:find('/new.ts',1,true) and e.files['/old.ts']=='recreated file' and e.files['/new.ts']=='video A')
-e=env(); e.edcb.RenameFileNoReplace=nil
+e=env()
 assert(run(e).success and e.dbpath=='/new.ts')
 e=env(); e.files['/old.ts']=nil; e.files['/new.ts']='video'; e.pathResult=false
 assert(run(e).err and e.dbpath=='/old.ts' and e.moves==0)

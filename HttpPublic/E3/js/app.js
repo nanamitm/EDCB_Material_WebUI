@@ -854,7 +854,8 @@ document.addEventListener('alpine:init', () => {
       let running = false;
       let restoreAfterSync = false;
       let retryDelay = 1000;
-      const syncTopic = async topic => {
+      // skipRedraw: 同じ同期でEPGも更新する場合は、そちらの再描画に任せる
+      const syncTopic = async (topic, skipRedraw = false) => {
         if (topic === 'epg') return this.refreshEpg();
         if (topic === 'tuner') return this.updateTunerStatus();
         await this.refreshData(topic);
@@ -867,6 +868,7 @@ document.addEventListener('alpine:init', () => {
           }
         });
         if (this.isPage('#search')) this.updateDisplayList();
+        if (skipRedraw) return;
         if (this.isPage('#epg')) this.loadEpg();
         if (this.isPage('#epgweek')) await this.loadWeeklyEpg();
       };
@@ -878,7 +880,14 @@ document.addEventListener('alpine:init', () => {
         running = true;
         this.loading = true;
         try {
-          const results = await Promise.allSettled(topics.map(syncTopic));
+          // 予約とEPGを同時に更新する場合は、予約を反映してからEPGを更新して再描画を1回にする
+          // （無変更の再描画はページ入り直しとして全体をクリアするため、二重に呼ばない）
+          const withEpg = topics.includes('epg');
+          const reserveTask = topics.includes('#reserve') ? syncTopic('#reserve', withEpg) : null;
+          const results = await Promise.allSettled(topics.map(topic =>
+            topic === '#reserve' ? reserveTask :
+            topic === 'epg' && reserveTask ? reserveTask.catch(() => {}).then(() => syncTopic('epg')) :
+            syncTopic(topic)));
           results.forEach((result, i) => {
             if (result.status === 'rejected') {
               pending.add(topics[i]);
@@ -1882,7 +1891,8 @@ document.addEventListener('alpine:init', () => {
         return s.replace(/\r?\n/g, '<br>');
       },
       title(a) {
-        return !a ? '' : `${a.replace(/　/g, ' ').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\[(新|終|再|交|映|手|声|多|字|二|Ｓ|Ｂ|SS|無|Ｃ|S1|S2|S3|MV|双|デ|Ｄ|Ｎ|Ｗ|Ｐ|HV|SD|天|解|料|前|後|初|生|販|吹|PPV|演|移|他|収)\]/g, '<span class="mark">$1</span>')}`
+        const escapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+        return !a ? '' : `${String(a).replace(/　/g, ' ').replace(/[&<>"']/g, c => escapes[c]).replace(/\[(新|終|再|交|映|手|声|多|字|二|Ｓ|Ｂ|SS|無|Ｃ|S1|S2|S3|MV|双|デ|Ｄ|Ｎ|Ｗ|Ｐ|HV|SD|天|解|料|前|後|初|生|販|吹|PPV|演|移|他|収)\]/g, '<span class="mark">$1</span>')}`
       },
       sanitizeTitle(a) {
         return !a ? '' : a.replace(/(?!^【.*?】$)[＜【\[].*?[＞】\]]|（.*?版）/g, '')
@@ -3067,14 +3077,15 @@ document.addEventListener('alpine:init', () => {
         const list = await res.json();
 
         if (!isCurrent() || !this.isPage('#search')) return;
-        if (list.err) throw new Error(list.err);
+        if (list.err) throw Object.assign(new Error(list.err), { serverMessage: list.err });
         if (!Array.isArray(list)) throw new Error('検索結果の形式が正しくありません');
         this.applySearchResults(list, search);
         if (this.detailRequestId === detailRequestId) this.sidePanel.close();
       } catch (e) {
         if (!isCurrent() || !this.isPage('#search')) return;
         console.error("Search failed", e);
-        if (!e.handled) this.snackbar.error('検索に失敗しました');
+        // サーバーが返した理由（不正な検索条件など）があれば表示する
+        if (!e.handled) this.snackbar.error(e.serverMessage ? `検索に失敗しました: ${e.serverMessage}` : '検索に失敗しました');
       } finally {
         if (isCurrent()) {
           this.searchLoading = false;
@@ -3096,13 +3107,13 @@ document.addEventListener('alpine:init', () => {
         if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
         const data = await res.json();
         if (!isCurrent() || !this.isPage('#search')) return;
-        if (data.err) throw new Error(data.err);
+        if (data.err) throw Object.assign(new Error(data.err), { serverMessage: data.err });
         if (!Array.isArray(data.items) || !data.searchInfo) throw new Error('検索条件を取得できませんでした');
         this.applySearchResults(data.items, { searchInfo: data.searchInfo });
       } catch (e) {
         if (!isCurrent() || !this.isPage('#search')) return;
         console.error("Search failed", e);
-        if (!e.handled) this.snackbar.error('検索に失敗しました');
+        if (!e.handled) this.snackbar.error(e.serverMessage ? `検索に失敗しました: ${e.serverMessage}` : '検索に失敗しました');
       } finally {
         if (isCurrent()) {
           this.searchLoading = false;

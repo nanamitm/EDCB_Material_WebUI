@@ -22,9 +22,10 @@ end
 
 function Program(r)
   local function ParseDateTime(date,time)
-    local year,month,day=(date or ''):match('^(%d%d%d%d)%-(%d%d)%-(%d%d)$')
-    local hour,min,sec=(time or ''):match('^(%d%d):(%d%d):(%d%d)$')
-    if not hour then hour,min=(time or ''):match('^(%d%d):(%d%d)$') end
+    -- 外部クライアント向けに月・日・時刻の1桁表記も受け付ける（範囲は下で検査する）
+    local year,month,day=(date or ''):match('^(%d%d%d%d)%-(%d%d?)%-(%d%d?)$')
+    local hour,min,sec=(time or ''):match('^(%d%d?):(%d%d?):(%d%d?)$')
+    if not hour then hour,min=(time or ''):match('^(%d%d?):(%d%d?)$') end
     year,month,day=tonumber(year),tonumber(month),tonumber(day)
     hour,min,sec=tonumber(hour),tonumber(min),tonumber(sec) or 0
     if not year or year<1 or not month or month<1 or month>12 or not day or day<1 or not hour or not min or hour>23 or min>59 or sec>59 then return end
