@@ -21,22 +21,31 @@ function EventInfo(r)
 end
 
 function Program(r)
-  startdate={string.match(mg.get_var(post,'startdate'), '^(%d+)%-(%d+)%-(%d+)$')}
-  startTime={string.match(mg.get_var(post,'starttime'), '^(%d+):(%d+):(%d+)$')}
-  r.startTime={
-    year=startdate[1],
-    month=startdate[2],
-    day=startdate[3],
-    hour=startTime[1],
-    min=startTime[2],
-    sec=startTime[3]
-  }
-  endHour,endMin,endSec=string.match(mg.get_var(post,'endtime'), '^(%d+):(%d+):(%d+)$')
-  --正当な日時か検査
-  if r.startTime.year and r.startTime.month and r.startTime.day and
-      r.startTime.hour and r.startTime.min and r.startTime.sec and
-      os.time(r.startTime) and endHour and endMin and endSec
-  then
+  local function ParseDateTime(date,time)
+    local year,month,day=(date or ''):match('^(%d%d%d%d)%-(%d%d)%-(%d%d)$')
+    local hour,min,sec=(time or ''):match('^(%d%d):(%d%d):(%d%d)$')
+    if not hour then hour,min=(time or ''):match('^(%d%d):(%d%d)$') end
+    year,month,day=tonumber(year),tonumber(month),tonumber(day)
+    hour,min,sec=tonumber(hour),tonumber(min),tonumber(sec) or 0
+    if not year or year<1 or not month or month<1 or month>12 or not day or day<1 or not hour or not min or hour>23 or min>59 or sec>59 then return end
+    local days={31,(year%4==0 and (year%100~=0 or year%400==0)) and 29 or 28,31,30,31,30,31,31,30,31,30,31}
+    if day>days[month] then return end
+    local t={year=year,month=month,day=day,hour=hour,min=min,sec=sec}
+    local ok,stamp=pcall(TimeWithZone,t)
+    if ok and stamp then
+      return t,stamp
+    end
+  end
+  local startDate=mg.get_var(post,'startdate')
+  local endDate=mg.get_var(post,'enddate')
+  local startTime,startStamp=ParseDateTime(startDate,mg.get_var(post,'starttime'))
+  local endTime,endStamp=ParseDateTime(endDate or startDate,mg.get_var(post,'endtime'))
+  if startTime and endTime then
+    local duration=endStamp-startStamp
+    -- 終了日を送らない従来のクライアントは翌日への日またぎとして扱う
+    if not endDate and duration<0 then duration=duration+24*3600 end
+    if duration<=0 then return end
+    r.startTime=startTime
     if mg.get_var(post,'title') then
       r.title=mg.get_var(post,'title')
     end
@@ -50,8 +59,7 @@ function Program(r)
       end
     end
     r.eid=65535
-    r.durationSecond=(endHour-r.startTime.hour)*3600+(endMin-r.startTime.min)*60+endSec-r.startTime.sec
-    r.durationSecond=r.durationSecond+(r.durationSecond<0 and 24*3600 or 0)
+    r.durationSecond=duration
     return r
   end
 end
@@ -126,8 +134,11 @@ if post then
     end
   elseif mg.get_var(post,'del') then
     if edcb.GetReserveData(id) then
-      edcb.DelReserveData(id)
-      del='予約を削除しました'
+      if edcb.DelReserveData(id) then
+        del='予約を削除しました'
+      else
+        err='予約を削除できませんでした'
+      end
     else
       err='予約が見つかりません'
     end

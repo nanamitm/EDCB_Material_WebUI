@@ -223,7 +223,7 @@ document.addEventListener('alpine:init', () => {
     totalCount: null,
     cursor: 0,
     perPage: 50,
-    activeTunerId: 1,
+    activeTunerId: null,
     dashboardData: {
       olympic: [], anime: [], newPrograms: [],
       reserves: [], recs: [], storage: [], nowOnAir: {},
@@ -940,6 +940,7 @@ document.addEventListener('alpine:init', () => {
         });
         this.lastUpdated[internalKey] = Date.now();
         this.totals[internalKey] = data.total ?? list.length;
+        if (internalKey === 'tunerreserve') this.ensureActiveTuner();
 
         // ダッシュボードや表示リストへの反映
         this.syncDashboardData();
@@ -1349,11 +1350,16 @@ document.addEventListener('alpine:init', () => {
       this.updateDisplayList();
     },
 
+    ensureActiveTuner() {
+      const tuners = this.allData.tunerreserve;
+      if (!tuners.has(this.activeTunerId)) this.activeTunerId = tuners.keys().next().value ?? null;
+    },
     updateDisplayList() {
       const internalKey = this.page.replace('#', '');
 
       // チューナー別予約ページの場合
       if (this.isPage('#tunerreserve')) {
+        this.ensureActiveTuner();
         const newTunerDisplayData = {};
         this.allData.tunerreserve.forEach(tuner => {
           const tid = tuner.tunerID;
@@ -1672,6 +1678,7 @@ document.addEventListener('alpine:init', () => {
         epgKeys.forEach((sid, i) => {
           if (Array.isArray(epgVals[i])) this.allData.epg.set(sid, new Map(epgVals[i]));
         });
+        this.ensureActiveTuner();
 
         if ((this.sets.networkMask & 1) === 0) this.sets.networkMask |= 1;
         if (this.sets.networkMask === 1 && this.allData.epg.size > 0) this.updateNetworkMask();
@@ -2589,6 +2596,7 @@ document.addEventListener('alpine:init', () => {
     },
 
     detail: {},
+    detailRequestId: 0,
     sidePanel: {
       el: document.getElementById('sidePanel'),
       d: {},
@@ -2599,6 +2607,7 @@ document.addEventListener('alpine:init', () => {
       selectedServices: [],
       init() {
         this.el.addEventListener('close', () => {
+          this.app.detailRequestId++;
           if (!this.app.params.id) return;
           if (this.shouldGoBack) {
             this.shouldGoBack = false;
@@ -2650,16 +2659,9 @@ document.addEventListener('alpine:init', () => {
         this.updateServiceList();
       },
       applyPreset(presetId) {
-        if (!this.r) return;
         const id = parseInt(presetId);
-        if (id === 65535) {
-          this.r = Object.assign(this.r, this.app.clone(this.detail.recSetting));
-        } else {
-          const preset = this.allData.recpreset.get(id);
-          if (preset) {
-            this.r = Object.assign(this.r, this.app.clone(preset.recSetting));
-          }
-        }
+        const setting = id === 65535 ? this.app.detail.recSetting : this.app.allData.recpreset.get(id)?.recSetting;
+        if (setting) this.d.recSetting = this.app.clone(setting);
       },
 
       title() {
@@ -2687,6 +2689,7 @@ document.addEventListener('alpine:init', () => {
         this.el.previousElementSibling.classList.add('active');
       },
       close(clearParam = true) {
+        this.app.detailRequestId++;
         if (clearParam && this.app.params.id) {
           if (this.shouldGoBack) {
             this.shouldGoBack = false;
@@ -2763,6 +2766,7 @@ document.addEventListener('alpine:init', () => {
 
     // 番組詳細を開くメイン関数
     openNewEntry(e) {
+      this.detailRequestId++;
       this.detail = { recSetting: this.allData.recpreset.get(0).recSetting };
       if (e) this.detail.searchInfo = { andKey: e.shortInfo.event_name, serviceList: [{ onid: e.onid, tsid: e.tsid, sid: e.sid }] };
       else if (this.isPage('#autoaddepg')) this.detail.searchInfo = {};
@@ -2775,12 +2779,28 @@ document.addEventListener('alpine:init', () => {
       this.sidePanel.show();
     },
     async openProgramDetailById(id) {
-      this.openProgramDetail(await this.getEpgById(id));
+      const requestId = ++this.detailRequestId;
+      const d = await this.getEpgById(id);
+      if (requestId === this.detailRequestId && d) return this.openProgramDetail(d);
     },
     async openProgramDetail(d) {
+      const requestId = ++this.detailRequestId;
+      if (!d) return;
       if (d.isDummy) {
         this.snackbar.error('この時間帯の番組情報がありません。')
         return
+      }
+      // 編集を始める前に番組情報を揃え、遅い応答で別の予約や入力内容を上書きしない
+      if (!d.past && d.startTime + d.durationSecond * 1000 >= this.now && d.eid !== 65535) {
+        if (d.reserveID) {
+          const epg = await this.getEpgById(this.getEventID(d));
+          if (requestId !== this.detailRequestId) return;
+          d = { ...d, ...epg || {} };
+        } else {
+          const r = this.allData.reserve.get(this.getEventID(d));
+          d = { ...d, ...(r ? { reserveID: r.reserveID, recSetting: r.recSetting }
+            : { recSetting: this.allData.recpreset.get(0).recSetting }) };
+        }
       }
       this.detail = d;
       if (d.eid === 65535) ui("#recSetting");
@@ -2801,22 +2821,9 @@ document.addEventListener('alpine:init', () => {
       const push = !this.params.id;
       this.sidePanel.shouldGoBack = push;
       this.updateQueryParam({ id: idVal }, push);
-
-      if (d.past || d.startTime + d.durationSecond * 1000 < this.now || d.eid === 65535) return;
-
-      if (d.reserveID) {
-        this.detail = { ...d, ...await this.getEpgById(this.getEventID(d)) || {} };
-      } else {
-        const r = this.allData.reserve.get(this.getEventID(d));
-        if (r) {
-          this.detail.reserveID = r.reserveID;
-          this.detail.recSetting = r.recSetting;
-        } else {
-          this.detail.recSetting = this.allData.recpreset.get(0).recSetting;
-        }
-      }
     },
     openAutoaddDetail(d) {
+      this.detailRequestId++;
       this.detail = d;
       if (d.searchInfo) ui("#searchInfo");
       else ui("#recSetting");
@@ -2829,6 +2836,7 @@ document.addEventListener('alpine:init', () => {
       this.updateQueryParam({ id: idVal }, push);
     },
     async openRecinfoDetail(d) {
+      this.detailRequestId++;
       this.detail = d;
       ui("#info")
       this.sidePanel.show();
