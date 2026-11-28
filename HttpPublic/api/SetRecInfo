@@ -1,6 +1,69 @@
 -- vim:set ft=lua:
 dofile(mg.script_name:gsub('[^\\/]*$','')..'util.lua')
 
+function ChangeRecFilePath(ri,destination)
+  local source=ri.recFilePath
+  local src=EdcbFindFilePlain(source)
+  local dst=EdcbFindFilePlain(destination)
+  if (src and src.isdir) or (dst and dst.isdir) then return {err='ファイルのパスを指定してください'} end
+  if not src then
+    -- 外部で移動済みの場合は情報だけを修復し、既存ファイルには触れない
+    if not dst then return {err='ファイルがみつかりませんでした'} end
+    if edcb.ChgPathRecFileInfo(ri.id,destination)==false then return {err='録画情報を保存できませんでした'} end
+    return {success='録画ファイルパスを変更しました'}
+  end
+  if dst and not IsEqualPath(source,destination) then return {err='移動先にファイルが存在します'} end
+  if source==destination then return {success='録画ファイルパスに変更はありません'} end
+
+  -- Windowsのos.renameは移動先があれば失敗する。POSIXのos.renameは上書きするため、移動の直前にも存在を確認する
+  -- （確認から移動までの間に作られたファイルは防げないが、従来と同等以上の安全性を保つ）
+  local function renameNoReplace(from,to)
+    if edcb.RenameFileNoReplace then return edcb.RenameFileNoReplace(from,to) end
+    if not WIN32 and EdcbFindFilePlain(to) then return false end
+    return edcb.os.rename(from,to)
+  end
+  local moves={{from=source,to=destination}}
+  local function AddSidecars(from,to)
+    for _,ext in ipairs({'.program.txt','.err'}) do
+      local old,new=from..ext,to..ext
+      local duplicate=false
+      for _,move in ipairs(moves) do if IsEqualPath(move.from,old) then duplicate=true end end
+      if not duplicate and old~=new and EdcbFindFilePlain(old) then
+        moves[#moves+1]={from=old,to=new}
+      end
+    end
+  end
+  AddSidecars(source,destination)
+  local infoFolder=edcb.GetPrivateProfile('SET','RecInfoFolder','','Common.ini')
+  if infoFolder~='' then
+    AddSidecars(PathAppend(infoFolder,source:match('[^'..DIR_SEPS..']*$')),
+                PathAppend(infoFolder,destination:match('[^'..DIR_SEPS..']*$')))
+  end
+  -- 本体を動かす前に、付随ファイルの移動先も検査する
+  for _,move in ipairs(moves) do
+    if (EdcbFindFilePlain(move.from) or {}).isdir then return {err='付随ファイルのパスがディレクトリです: '..move.from} end
+    if EdcbFindFilePlain(move.to) and not IsEqualPath(move.from,move.to) then
+      return {err='移動先にファイルが存在します: '..move.to}
+    end
+  end
+  local completed={}
+  local function Rollback(message)
+    if #completed==0 then return {err=message} end
+    local remaining={}
+    for i=#completed,1,-1 do
+      local move=completed[i]
+      if not renameNoReplace(move.to,move.from) then remaining[#remaining+1]=move.to end
+    end
+    return {err=message..(#remaining>0 and '。元に戻せなかったファイル: '..table.concat(remaining,', ') or '。移動したファイルは元に戻しました')}
+  end
+  for _,move in ipairs(moves) do
+    if not renameNoReplace(move.from,move.to) then return Rollback('ファイルを移動できませんでした: '..move.from) end
+    completed[#completed+1]=move
+  end
+  if edcb.ChgPathRecFileInfo(ri.id,destination)==false then return Rollback('録画情報を保存できませんでした') end
+  return {success='録画ファイルパスを変更しました'}
+end
+
 a={err='不正値入力'}
 post=AssertPost()
 if post then
@@ -9,32 +72,20 @@ if post then
   if mg.get_var(post,'protect') then
     if ri then
       protect=mg.get_var(post,'protect')=='1'
-      edcb.ChgProtectRecFileInfo(ri.id, protect)
-      a={success='録画情報をプロテクト'..(protect and '' or 'を解除')..'しました'}
+      -- 戻り値のない旧版はnil。明示的な保存失敗だけを失敗として扱う
+      if edcb.ChgProtectRecFileInfo(ri.id, protect)==false then
+        a={err='録画情報のプロテクトを保存できませんでした'}
+      else
+        a={success='録画情報をプロテクト'..(protect and '' or 'を解除')..'しました'}
+      end
     else
       a={err='録画情報のプロテクトを変更できませんでした'}
     end
   elseif mg.get_var(post,'ren') then
-    ren=mg.get_var(post,'ren')
-    if ri and (EdcbFindFilePlain(ren) or EdcbFindFilePlain(ri.recFilePath)) then
-      RecInfoFolder=edcb.GetPrivateProfile('SET','RecInfoFolder','','Common.ini')
-      if RecInfoFolder == '' then
-        ori=ri.recFilePath
-        chg=ren
-      else
-        ori=PathAppend(RecInfoFolder, ri.recFilePath:match('[^'..DIR_SEPS..']-$'))
-        chg=PathAppend(RecInfoFolder, ren:match('[^'..DIR_SEPS..']-$'))
-      end
-      if EdcbFindFilePlain(ren) or edcb.os.rename(ri.recFilePath, ren) then
-        edcb.os.rename(ori..'.program.txt', chg..'.program.txt')
-        edcb.os.rename(ori..'.err', chg..'.err')
-        edcb.ChgPathRecFileInfo(ri.id, ren)
-        a={success='録画ファイルパスを変更しました'}
-      else
-        a={err='ファイルを移動できませんでした'}
-      end
+    if ri then
+      a=ChangeRecFilePath(ri,mg.get_var(post,'ren'))
     else
-      a={err=(ri and 'ファイル' or '録画情報')..'がみつかりませんでした'}
+      a={err='録画情報がみつかりませんでした'}
     end
   elseif mg.get_var(post,'del') then
     if ri and not ri.protectFlag then

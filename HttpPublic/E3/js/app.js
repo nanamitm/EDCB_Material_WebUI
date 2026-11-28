@@ -2617,6 +2617,14 @@ document.addEventListener('alpine:init', () => {
 
     detail: {},
     detailRequestId: 0,
+    detailFetchId: null,
+    beginDetailRequest() {
+      if (this.detailFetchId != null) {
+        this.detailFetchId = null;
+        this.loading = false;
+      }
+      return ++this.detailRequestId;
+    },
     sidePanel: {
       el: document.getElementById('sidePanel'),
       d: {},
@@ -2627,7 +2635,7 @@ document.addEventListener('alpine:init', () => {
       selectedServices: [],
       init() {
         this.el.addEventListener('close', () => {
-          this.app.detailRequestId++;
+          this.app.beginDetailRequest();
           if (!this.app.params.id) return;
           if (this.shouldGoBack) {
             this.shouldGoBack = false;
@@ -2709,7 +2717,7 @@ document.addEventListener('alpine:init', () => {
         this.el.previousElementSibling.classList.add('active');
       },
       close(clearParam = true) {
-        this.app.detailRequestId++;
+        this.app.beginDetailRequest();
         if (clearParam && this.app.params.id) {
           if (this.shouldGoBack) {
             this.shouldGoBack = false;
@@ -2786,7 +2794,7 @@ document.addEventListener('alpine:init', () => {
 
     // 番組詳細を開くメイン関数
     openNewEntry(e) {
-      this.detailRequestId++;
+      this.beginDetailRequest();
       this.detail = { recSetting: this.allData.recpreset.get(0).recSetting };
       if (e) this.detail.searchInfo = { andKey: e.shortInfo.event_name, serviceList: [{ onid: e.onid, tsid: e.tsid, sid: e.sid }] };
       else if (this.isPage('#autoaddepg')) this.detail.searchInfo = {};
@@ -2799,12 +2807,12 @@ document.addEventListener('alpine:init', () => {
       this.sidePanel.show();
     },
     async openProgramDetailById(id) {
-      const requestId = ++this.detailRequestId;
+      const requestId = this.beginDetailRequest();
       const d = await this.getEpgById(id);
       if (requestId === this.detailRequestId && d) return this.openProgramDetail(d);
     },
     async openProgramDetail(d) {
-      const requestId = ++this.detailRequestId;
+      const requestId = this.beginDetailRequest();
       if (!d) return;
       if (d.isDummy) {
         this.snackbar.error('この時間帯の番組情報がありません。')
@@ -2843,7 +2851,7 @@ document.addEventListener('alpine:init', () => {
       this.updateQueryParam({ id: idVal }, push);
     },
     openAutoaddDetail(d) {
-      this.detailRequestId++;
+      this.beginDetailRequest();
       this.detail = d;
       if (d.searchInfo) ui("#searchInfo");
       else ui("#recSetting");
@@ -2856,49 +2864,48 @@ document.addEventListener('alpine:init', () => {
       this.updateQueryParam({ id: idVal }, push);
     },
     async openRecinfoDetail(d) {
-      this.detailRequestId++;
-      this.detail = d;
-      ui("#info")
-      this.sidePanel.show();
-
-      // クエリパラメータを更新
-      const idVal = d.id;
-      const push = !this.params.id;
-      this.sidePanel.shouldGoBack = push;
-      this.updateQueryParam({ id: idVal }, push);
+      const requestId = this.beginDetailRequest();
       if (!d.programInfo) {
         try {
+          this.detailFetchId = requestId;
           this.loading = true;
-          // 1. 詳細情報を取得
-          const json = await this.fetch(`${this.ROOT}api/${this.pageMap['#recinfo'].api}?json=1&id=${d.id}`).then(r => r.json());
-
-          if (json) {
-            const parsed = this.parseProgramInfo(json.programInfo);
-            Object.assign(parsed, json);
-
-            // 2. allData.recinfo の中から同じIDのものを探す
-            const existing = this.allData.recinfo.get(d.id);
-
-            if (existing) {
-              // 3. 詳細データをマージ（上書き）
-              // これにより allData 自体が更新され、リアクティブに画面が変わる
-              Object.assign(existing, parsed);
-              // 4. 表示用の detail には、その実体をセット
-              this.detail = existing;
-            } else {
-              // 万が一一覧にない場合は直接入れる
-              this.detail = parsed;
-            }
+          const res = await this.fetch(`${this.ROOT}api/${this.pageMap['#recinfo'].api}?json=1&id=${d.id}`);
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          const json = await res.json();
+          if (requestId !== this.detailRequestId) return;
+          if (!json || json.err || json.id !== d.id) throw new Error(json?.err || '録画結果が存在しません');
+          const parsed = this.parseProgramInfo(json.programInfo);
+          Object.assign(parsed, json);
+          if (parsed.startTime) parsed.startTime = new Date(parsed.startTime).getTime();
+          const existing = this.allData.recinfo.get(d.id);
+          if (existing) {
+            Object.assign(existing, parsed);
+            d = existing;
+          } else {
+            d = parsed;
           }
         } catch(e) {
+          if (requestId !== this.detailRequestId) return;
           console.error(e);
-          this.snackbar.error('詳細の取得ができませんでした')
+          this.snackbar.error('詳細の取得ができませんでした');
+          return;
         } finally {
-          this.loading = false;
+          if (this.detailFetchId === requestId) {
+            this.detailFetchId = null;
+            this.loading = false;
+          }
         }
       }
+      if (requestId !== this.detailRequestId) return;
+      this.detail = d;
+      ui('#info');
+      this.sidePanel.show();
+      const push = !this.params.id;
+      this.sidePanel.shouldGoBack = push;
+      this.updateQueryParam({ id: d.id }, push);
     },
     openSearchDetail() {
+      this.beginDetailRequest();
       this.detail = this.search;
       ui("#searchInfo");
       this.sidePanel.show();
