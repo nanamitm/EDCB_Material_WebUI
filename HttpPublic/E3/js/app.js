@@ -203,6 +203,7 @@ document.addEventListener('alpine:init', () => {
     search: { isDummy: true, searchInfo: {} },
     searchPresetList: config.searchPresetList || [],
     history: [],
+    searchLoading: false,
     now: Date.now(),
     isOnline: false,
     isCellular: false,
@@ -811,7 +812,7 @@ document.addEventListener('alpine:init', () => {
         await this.refreshData(topic);
         if (!isActive() || topic !== '#reserve') return;
         this.allData.search.forEach((v, k) => {
-          if (!v.past) {
+          if (!v.past && !v.archive) {
             const r = this.allData.reserve.get(this.getEventID(v));
             if (!r && v.reserveID) v.reserveID = null;
             if (r) this.allData.search.set(k, { ...v, ...r });
@@ -1226,6 +1227,12 @@ document.addEventListener('alpine:init', () => {
     },
     // ページ切り替え時に呼ばれる
     async loadAll() {
+      if (this.searchLoading) {
+        this.searchLoading = false;
+        this.loading = false;
+      }
+      // 画面遷移前の検索応答で、移動先の結果やパネルを変更しない
+      this.beginRefresh('search');
       // 視聴ページ以外に移動した場合は再生を停止してインスタンスを破棄
       if (this.player.vid && !this.isPage('#watch')) {
         this.player.destroy();
@@ -1694,6 +1701,7 @@ document.addEventListener('alpine:init', () => {
     },
 
     getDataKey(d, mapName) {
+      if (mapName === 'search' && (d.past || d.archive)) return this.getPastEventID(d);
       const config = this.pageMap[mapName] || this.pageMap['#' + mapName];
       if (config && config.itemKey) {
         if (typeof config.itemKey === 'function') return config.itemKey(d);
@@ -1894,6 +1902,9 @@ document.addEventListener('alpine:init', () => {
     },
     getEventID(v) {
       return `${this.getServiceID(v)}-${v.eid}`
+    },
+    getPastEventID(v) {
+      return `${this.getServiceID(v)}-${Math.floor(new Date(v.startTime).getTime() / 1000) + 9 * 3600}`;
     },
     getTunerID(v) {
       return `ID:${this.convert.zero(v.tunerID.toString(16).toUpperCase(),8)} (${v.tunerName})`
@@ -2834,7 +2845,7 @@ document.addEventListener('alpine:init', () => {
       if (d.past && d.startTime) {
         // 過去番組はeidが変化している可能性があるため開始時間（秒）を使う
         // EDCBはJST時刻をそのまま秒換算した値で管理するため、UTC ms/1000 に +9h(32400) を加算する
-        idVal = `${this.getServiceID(d)}-${Math.floor(d.startTime / 1000) + 9 * 3600}`;
+        idVal = this.getPastEventID(d);
       } else if (d.reserveID && (this.isPage('#reserve','#tunerreserve') || !d.eid || d.eid === 65535)) {
         idVal = d.reserveID;
       } else {
@@ -2940,11 +2951,32 @@ document.addEventListener('alpine:init', () => {
       keyword = keyword.trim();
       this.history = this.history.filter(v => v !== keyword);
     },
+    applySearchResults(list, search) {
+      const results = new Map();
+      list.forEach(item => {
+        let v = { ...item, startTime: new Date(item.startTime).getTime() };
+        if (v.past || v.archive) {
+          v.past = true;
+          delete v.reserveID;
+          delete v.recSetting;
+          delete v.overlapMode;
+        } else {
+          v = { ...v, ...this.allData.reserve.get(this.getEventID(v)) || {} };
+        }
+        results.set(this.getDataKey(v, 'search'), v);
+      });
+      this.allData.search.clear();
+      results.forEach((v, key) => this.allData.search.set(key, v));
+      this.search = search;
+      this.totals.search = results.size;
+      this.updateDisplayList();
+    },
     async searchEvent(andKey) {
       const fd = new URLSearchParams();
+      let search;
 
       if (andKey) {
-        this.search = { searchInfo: { andKey: andKey, hideGroupSub: true } };
+        search = { searchInfo: { andKey: andKey, hideGroupSub: true } };
         fd.append('andKey', andKey);
         fd.append('hideGroupSub', 1);
         (this.getDefSearchService()).forEach(v => fd.append('serviceList', v));
@@ -2960,63 +2992,66 @@ document.addEventListener('alpine:init', () => {
           this.snackbar.error(isMissing ? 'アーカイブ検索の日時をすべて入力してください' : '開始日時は終了日時より前に設定してください');
           return;
         }
-        this.search = this.clone(this.sidePanel.d);
+        search = this.clone(this.sidePanel.d);
         // 検索フォームから条件を収集
         this.getFormData(document.getElementById('searchInfo'), fd);
       }
 
+      const isCurrent = this.beginRefresh('search');
+      const detailRequestId = this.detailRequestId;
       try {
         // 3. 検索結果ページへ遷移（URLを確定させる）
         if (!this.isPage('#search')) {
           this.openPage('#search', {}, true, false);
         }
+        this.searchLoading = true;
         this.loading = true;
 
         const res = await this.fetchWithToken(`${this.ROOT}api/SearchEvent?json=1`, { method: 'POST', body: fd }, 'searchevent', false, 20000);
         const list = await res.json();
 
+        if (!isCurrent() || !this.isPage('#search')) return;
         if (list.err) throw new Error(list.err);
-        this.allData.search.clear();
-        (Array.isArray(list) ? list : []).forEach(v => {
-          v.startTime = new Date(v.startTime).getTime();
-          if (!v.past) v = { ...v, ...this.allData.reserve.get(this.getEventID(v)) || {} };
-          this.allData.search.set(this.getDataKey(v, 'search'), v);
-        });
-
-        this.totals.search = this.allData.search.size;
-        this.updateDisplayList();
-        this.sidePanel.close();
+        if (!Array.isArray(list)) throw new Error('検索結果の形式が正しくありません');
+        this.applySearchResults(list, search);
+        if (this.detailRequestId === detailRequestId) this.sidePanel.close();
       } catch (e) {
+        if (!isCurrent() || !this.isPage('#search')) return;
         console.error("Search failed", e);
         if (!e.handled) this.snackbar.error('検索に失敗しました');
       } finally {
-        this.loading = false;
+        if (isCurrent()) {
+          this.searchLoading = false;
+          this.loading = false;
+        }
       }
     },
     async searchPreset(i) {
+      const isCurrent = this.beginRefresh('search');
       try {
         if (!this.isPage('#search')) {
           this.openPage('#search', { preset: i }, true, false);
         }
 
+        this.searchLoading = true;
         this.loading = true;
 
-        const res = await this.fetch(`${this.ROOT}api/SearchEvent?json=1&preset=${i}`);
-        const list = await res.json();
-        this.allData.search.clear();
-        (Array.isArray(list) ? list : []).forEach(v => {
-          v.startTime = new Date(v.startTime).getTime();
-          if (!v.past) v = { ...v, ...this.allData.reserve.get(this.getEventID(v)) || {} };
-          this.allData.search.set(this.getDataKey(v, 'search'), v);
-        });
-
-        this.totals.search = this.allData.search.size;
-        this.updateDisplayList();
+        const res = await this.fetch(`${this.ROOT}api/SearchEvent?json=1&preset=${encodeURIComponent(i)}&withKey=1`);
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        const data = await res.json();
+        if (!isCurrent() || !this.isPage('#search')) return;
+        if (data.err) throw new Error(data.err);
+        if (!Array.isArray(data.items) || !data.searchInfo) throw new Error('検索条件を取得できませんでした');
+        this.applySearchResults(data.items, { searchInfo: data.searchInfo });
       } catch (e) {
+        if (!isCurrent() || !this.isPage('#search')) return;
         console.error("Search failed", e);
         if (!e.handled) this.snackbar.error('検索に失敗しました');
       } finally {
-        this.loading = false;
+        if (isCurrent()) {
+          this.searchLoading = false;
+          this.loading = false;
+        }
       }
     },
     async searchOlympic(silent) {

@@ -8,10 +8,12 @@ node --test tests/reservation.test.cjs
 node --test tests/autoadd.test.cjs
 node --test tests/recinfo.test.cjs
 node --test tests/epg-onair.test.cjs
+node --test tests/search.test.cjs
 lua tests/common-api.lua
 lua tests/reservation.lua
 lua tests/autoadd.lua
 lua tests/recinfo.lua
+lua tests/search.lua
 ```
 
 JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
@@ -26,3 +28,5 @@ JavaScript側はNode.js 22以降、Lua側はLua 5.2を想定しています。
 安全なロールバックと保護の応答を確認し、詳細取得の競合・終了も検証します。
 番組表・放送中一覧では、範囲別の局・サブチャンネル、空データ、サービスをまたぐEID、
 放送時間未定と次番組への切り替え、ネットワーク選択を検証します。
+検索では、通常・プリセットの応答競合、画面遷移、条件と結果の一括反映、過去番組の識別、
+予約の結合、日数の境界とプリセット条件取得APIの互換性を検証します。

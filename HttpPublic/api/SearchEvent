@@ -5,7 +5,14 @@ post=AssertPost()
 if post then
   key,err=GetSearchKey(post)
 else
-  key=GetSearchKeyPreset(mg.request_info.query_string) or GetSearchKeyKeyword(mg.request_info.query_string)
+  key=GetSearchKeyPreset(mg.request_info.query_string)
+  if not key then
+    if mg.get_var(mg.request_info.query_string,'preset') then
+      err='検索プリセットが存在しません'
+    else
+      key=GetSearchKeyKeyword(mg.request_info.query_string)
+    end
+  end
 end
 
 json=GetVarInt(mg.request_info.query_string,'json',0,1)==1
@@ -20,7 +27,11 @@ archive=GetVarInt(post, 'archive')==1
 a=SearchEpg(key,GetVarTimeRange(post),archive)
 
 if json then
-  ResponseJson(a,mg.request_info.query_string)
+  if GetVarInt(mg.request_info.query_string,'withKey',0,1)==1 then
+    ResponseJson({items=a,searchInfo=key})
+  else
+    ResponseJson(a,mg.request_info.query_string)
+  end
 else
   ct=CreateContentBuilder()
   ct:Append('<?xml version="1.0" encoding="UTF-8" ?>')
