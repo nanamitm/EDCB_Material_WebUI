@@ -1871,7 +1871,7 @@ ct:Append([=[
         <template x-if="isList('search', totals.search)">
           <section class="responsive vertical-margin">
             <ul class="list medium-space">
-              <template x-for="d in displayList" :key="getEventID(d)">
+              <template x-for="d in displayList" :key="getDataKey(d, 'search')">
                 <li class="ripple" @click="openProgramDetail(d)">
                   <div class="max row no-margin no-wrap">
                     <div class="center-align">
@@ -1922,7 +1922,7 @@ ct:Append([=[
                   </tr>
                 </thead>
                 <tbody>
-                  <template x-for="d in displayList" :key="getEventID(d)">
+                  <template x-for="d in displayList" :key="getDataKey(d, 'search')">
                     <tr class="ripple" @click="openProgramDetail(d)">
                       <td class="min">
                         <template x-if="!d.reserveID">
@@ -4759,7 +4759,7 @@ ct:Append([=[
                 <legend>対象期間</legend>
                 <div class="row tiny-space right-align">
                   <div class="field small min" x-init="s.days ??= 0;">
-                    <input type="number" name="days" x-model="s.days">
+                    <input type="number" name="days" min="0" x-model="s.days">
                   </div>
                   日間
                 </div>

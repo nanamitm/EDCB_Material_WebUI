@@ -1987,6 +1987,7 @@ function SearchEpg(key,range,archive)
     local b={}
     for i,v in ipairs(a) do
       v.archive=true
+      v.past=true
       if key.hideGroupSub and not isGroupSub(v) then
         table.insert(b,v)
       end
@@ -2005,11 +2006,13 @@ function SearchEpg(key,range,archive)
     end
   else
     a={}
+    local now=os.time()+9*3600
+    local limit=(key.days or 0)>0 and now+key.days*86400 or nil
     for i,v in ipairs(edcb.SearchEpg(key)) do
       if v.startTime then
         local startTime=TimeWithZone(v.startTime)
         local endTime=v.durationSecond and startTime+v.durationSecond or startTime
-        if os.time()+9*3600<=endTime and (not key.hideGroupSub or not isGroupSub(v)) then
+        if now<=endTime and (not limit or startTime<limit) and (not key.hideGroupSub or not isGroupSub(v)) then
           table.insert(a,v)
         end
       end
