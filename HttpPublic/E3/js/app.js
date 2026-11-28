@@ -1036,6 +1036,8 @@ document.addEventListener('alpine:init', () => {
       const isCurrent = this.beginRefresh(`epg-range:${key}`);
       const isValid = () => isCurrent() && this.epg.generation === generation;
       const isVisible = () => this.isPage('#epg') && this.getEpgKey(this.epg.epgStartTime) === key;
+      // 読み込み表示は最後に開始した取得だけが解除する（表示中のページには依存しない）
+      const ownsLoading = this.beginRefresh('epg-range-loading');
       this.loading = true;
       try {
         const d = new Date(startTime);
@@ -1070,7 +1072,7 @@ document.addEventListener('alpine:init', () => {
         this.epg.servicesToDisplay.forEach(s => s.displayEvents = []);
         this.snackbar.error('取得できませんでした');
       } finally {
-        if (isCurrent() && isVisible()) this.loading = false;
+        if (ownsLoading()) this.loading = false;
       }
     },
     async refreshStaticData(snackbar) {
@@ -2450,6 +2452,8 @@ document.addEventListener('alpine:init', () => {
         return;
       }
 
+      // 読み込み表示は最後に開始した取得だけが解除する（EPG更新やページ移動で取得が破棄されても残さない）
+      const ownsLoading = this.beginRefresh('epg-weekly-loading');
       this.loading = true;
       try {
         // 指定されたサービスの1週間分(168時間)を取得
@@ -2472,10 +2476,8 @@ document.addEventListener('alpine:init', () => {
         console.error("Failed to load weekly EPG", e);
         this.snackbar.error('取得できませんでした');
       } finally {
-        if (this.epg.weeklyLoadId === currentWeeklyLoadId) {
-          this.epg.fetchingWeekly = null;
-          this.loading = false;
-        }
+        if (this.epg.weeklyLoadId === currentWeeklyLoadId) this.epg.fetchingWeekly = null;
+        if (ownsLoading()) this.loading = false;
       }
     },
     // ネットワーク（タブ）を切り替え、履歴に追加する
