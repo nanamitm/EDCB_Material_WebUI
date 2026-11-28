@@ -258,6 +258,46 @@ test('simultaneous reservation and EPG updates apply reservations first and redr
   await send({ reserve: 2 });
   assert.equal(app.renders, 2);
 });
+for (const page of ['#epg', '#epgweek']) {
+  test(`${page} redraws successful reservation changes when simultaneous EPG refresh fails`, async () => {
+    const { app, calls, send, runTimer } = sseSetup();
+    app.page = page;
+    app.loadWeeklyEpg = async () => { app.renders++; };
+    let failEpg = true;
+    app.refreshEpg = async () => {
+      calls.set('epg', (calls.get('epg') || 0) + 1);
+      if (failEpg) throw Error('EPG unavailable');
+      if (page === '#epg') app.loadEpg(); else await app.loadWeeklyEpg();
+    };
+    await send({ reserve: 1, epg: 1 });
+    assert.equal(calls.get('#reserve'), 1);
+    assert.equal(app.renders, 1);
+    await runTimer(1000);
+    assert.equal(app.renders, 1);
+    assert.equal(calls.get('#reserve'), 1);
+    failEpg = false;
+    await runTimer(2000);
+    assert.equal(calls.get('epg'), 3);
+    assert.equal(app.renders, 2);
+  });
+}
+
+test('failed reservation and EPG reads do not trigger a reservation fallback redraw', async () => {
+  const { app, send } = sseSetup(); app.page = '#epg';
+  app.refreshData = async () => { throw Error('reservation unavailable'); };
+  app.refreshEpg = async () => { throw Error('EPG unavailable'); };
+  await send({ reserve: 1, epg: 1 });
+  assert.equal(app.renders, 0);
+});
+
+test('stopping SSE during EPG failure prevents a stale reservation fallback redraw', async () => {
+  const { app, send } = sseSetup(); const pending = deferred(); app.page = '#epg';
+  app.refreshEpg = () => pending.promise;
+  const task = send({ reserve: 1, epg: 1 });
+  app.stopSSE(); pending.reject(Error('EPG unavailable')); await task;
+  assert.equal(app.renders, 0);
+});
+
 test('notifications received during a sync are queued rather than discarded', async () => {
   const { app, send, runTimer } = sseSetup(); const pending = deferred(); let calls = 0;
   app.refreshData = async () => { if (++calls === 1) await pending.promise; };

@@ -85,14 +85,20 @@ local function posix(e)
   return e
 end
 e=posix(env()); e.files['/old.ts.err']='errors'
-assert(run(e).success and e.dbpath=='/new.ts' and e.files['/new.ts']=='video A' and e.files['/new.ts.err']=='errors')
+assert(run(e).err and e.dbpath=='/old.ts' and e.moves==0 and e.pathWrites==0)
+assert(e.files['/old.ts']=='video A' and e.files['/old.ts.err']=='errors' and not e.files['/new.ts'])
 e=posix(env()); e.files['/new.ts']='video B'
 assert(run(e).err and e.moves==0 and e.files['/new.ts']=='video B')
-e=posix(env()); e.pathResult=false; e.onPathWrite=function() e.files['/old.ts']='recreated file' end
-result=run(e)
-assert(result.err:find('/new.ts',1,true) and e.files['/old.ts']=='recreated file' and e.files['/new.ts']=='video A')
+e=posix(env()); e.onMove=function(a,b) e.files[b]='concurrent recording' end
+assert(run(e).err and e.moves==0 and e.pathWrites==0 and e.files['/old.ts']=='video A')
+e=posix(env()); e.pathResult=false
+assert(run(e).err and e.moves==0 and e.pathWrites==0 and e.files['/old.ts']=='video A')
+e=posix(env()); e.files['/old.ts']=nil; e.files['/new.ts']='relocated video'
+assert(run(e).success and e.moves==0 and e.dbpath=='/new.ts' and e.files['/new.ts']=='relocated video')
+e=posix(env()); e.post={ren='/old.ts'}
+assert(run(e).success and e.moves==0 and e.pathWrites==0)
 e=env()
 assert(run(e).success and e.dbpath=='/new.ts')
 e=env(); e.files['/old.ts']=nil; e.files['/new.ts']='video'; e.pathResult=false
 assert(run(e).err and e.dbpath=='/old.ts' and e.moves==0)
-print('PASS: POSIX and Windows fallbacks move without overwriting, and path-repair save failure')
+print('PASS: POSIX refuses unsafe moves but allows path repair and unchanged paths; Windows still moves safely')
